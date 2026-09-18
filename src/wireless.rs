@@ -22,10 +22,6 @@ impl Advertisement {
     fn start(info: &PairableHostInfo, pairing_file: &RpPairingFile, port: u16) -> Result<Self> {
         let identifier = pairing_file.identifier.clone();
         let txt_records = info.mdns_txt_records(&identifier);
-        let properties: Vec<_> = txt_records
-            .iter()
-            .map(|(key, value)| (key.as_str(), value.as_str()))
-            .collect();
 
         let daemon = ServiceDaemon::new().context("failed to start mDNS daemon")?;
         daemon
@@ -40,7 +36,7 @@ impl Advertisement {
             &host,
             "",
             port,
-            &properties,
+            txt_records,
         )
         .context("failed to create iOS 27 wireless-pairing mDNS service")?
         .enable_addr_auto();
@@ -99,8 +95,8 @@ where
         let mut host = PairableHost::new(RpPairingSocket::new_device(stream), host_info);
         let peer = host
             .accept(&mut pairing_file, |code| {
-                pin(code.clone());
-                async move { code }
+                pin(code);
+                async {}
             })
             .await
             .context("iOS Remote Pairing handshake failed")?;
