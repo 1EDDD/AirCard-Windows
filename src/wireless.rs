@@ -522,3 +522,344 @@ where
 async fn timeout_at(deadline: Instant, fut: impl std::future::Future<Output = Result<ServiceEvent, mdns_sd::RecvError>>) -> Result<Result<ServiceEvent, mdns_sd::RecvError>, tokio::time::error::Elapsed> {
     timeout(deadline.saturating_duration_since(Instant::now()), fut).await
 }
+
+
+async fn send_plist_frame(
+    stream: &mut Box<dyn idevice::ReadWrite>,
+    value: plist::Value,
+) -> Result<()> {
+    use tokio::io::{AsyncWriteExt, BufWriter};
+
+    let mut body = Vec::new();
+    value.to_writer_xml(&mut body)?;
+    let len = u32::try_from(body.len()).context("plist frame is too large")?;
+    let mut writer = BufWriter::new(stream);
+    writer.write_all(&len.to_be_bytes()).await?;
+    writer.write_all(&body).await?;
+    writer.flush().await?;
+    Ok(())
+}
+
+async fn read_plist_frame(stream: &mut Box<dyn idevice::ReadWrite>) -> Result<plist::Value> {
+    use tokio::io::AsyncReadExt;
+
+    let mut len_buf = [0u8; 4];
+    stream.read_exact(&mut len_buf).await?;
+    let len = u32::from_be_bytes(len_buf) as usize;
+    if len == 0 || len > 64 * 1024 * 1024 {
+        bail!("invalid plist frame length: {len}");
+    }
+    let mut body = vec![0u8; len];
+    stream.read_exact(&mut body).await?;
+    Ok(plist::from_bytes(&body)?)
+}
+
+async fn rsd_service_stream(
+    link: &mut WirelessLink,
+    names: &[&str],
+) -> Result<Box<dyn idevice::ReadWrite>> {
+    for name in names {
+        if link.rsd.services.contains_key(*name) {
+            let mut stream = link.connect_rsd_service(name).await?;
+            send_plist_frame(
+                &mut stream,
+                plist::Value::Dictionary(
+                    [
+                        ("Label".into(), plist::Value::String("aircard".into())),
+                        ("ProtocolVersion".into(), plist::Value::String("2".into())),
+                        ("Request".into(), plist::Value::String("RSDCheckin".into())),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+            )
+            .await?;
+            let _ = read_plist_frame(&mut stream).await?;
+            let _ = read_plist_frame(&mut stream).await?;
+            return Ok(stream);
+        }
+    }
+    bail!("None of the requested RSD services are advertised: {names:?}")
+}
+
+/// Send an Apple StreamingZip archive through the iOS 27 RSD service.
+pub fn stage_streaming_zip_wireless(
+    source_subdir: &str,
+    archive: &[u8],
+) -> Result<()> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("failed to create wireless streaming-zip runtime")?;
+
+    runtime.block_on(async {
+        use tokio::io::AsyncWriteExt;
+
+        let mut link = open_link().await?;
+        let mut stream = rsd_service_stream(
+            &mut link,
+            &[
+                "com.apple.streaming_zip_conduit.shim.remote",
+                "com.apple.streaming_zip_conduit",
+            ],
+        )
+        .await
+        .context("streaming_zip_conduit is not available over the wireless RSD tunnel")?;
+
+        let request = plist::Value::Dictionary(
+            [(
+                "MediaSubdir".into(),
+                plist::Value::String(source_subdir.to_string()),
+            )]
+            .into_iter()
+            .collect(),
+        );
+        send_plist_frame(&mut stream, request).await?;
+
+        let mut sent = 0usize;
+        while sent < archive.len() {
+            let end = (sent + 64 * 1024).min(archive.len());
+            stream.write_all(&archive[sent..end]).await?;
+            sent = end;
+        }
+        stream.flush().await?;
+
+        let _response = read_plist_frame(&mut stream)
+            .await
+            .context("StreamingZip did not return a response")?;
+        Ok::<(), anyhow::Error>(())
+    })
+}
+
+/// Minimal clean-room AirTraffic legacy message client over the RSD shim.
+pub fn sync_assets_via_airtraffic_wireless<L>(
+    assets: &[(&str, &str)],
+    mut log: L,
+) -> Result<()>
+where
+    L: FnMut(&str),
+{
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("failed to create wireless AirTraffic runtime")?;
+
+    runtime.block_on(async {
+        use std::collections::HashMap;
+
+        let mut link = open_link().await?;
+        let mut stream = rsd_service_stream(
+            &mut link,
+            &["com.apple.atc2.shim.remote", "com.apple.atc.shim.remote"],
+        )
+        .await
+        .context("AirTraffic ATC RSD shim is not available")?;
+
+        let message_name = |value: &plist::Value| {
+            value
+                .as_dictionary()
+                .and_then(|d| {
+                    d.get("Command")
+                        .or_else(|| d.get("MessageName"))
+                        .or_else(|| d.get("Name"))
+                })
+                .and_then(|v| v.as_string())
+                .unwrap_or("")
+                .to_string()
+        };
+
+        log("Waiting for SyncAllowed from iPhone...");
+        let mut sync_allowed = false;
+        for _ in 0..30 {
+            let msg = read_plist_frame(&mut stream).await?;
+            let name = message_name(&msg);
+            if name == "SyncAllowed" {
+                sync_allowed = true;
+                break;
+            }
+            if name == "SyncFailed" {
+                bail!("AirTraffic returned SyncFailed before sync started");
+            }
+        }
+        if !sync_allowed {
+            bail!("AirTraffic: SyncAllowed was not received");
+        }
+
+        let library_id = uuid::Uuid::new_v4().to_string();
+        let host_info = plist::Value::Dictionary(
+            [
+                ("Type".into(), plist::Value::String("iTunes".into())),
+                ("Version".into(), plist::Value::String("13.7.0.161".into())),
+                ("MacOSVersion".into(), plist::Value::String("Windows NT 10.0".into())),
+                ("SyncHostName".into(), plist::Value::String("aircard".into())),
+                ("LibraryID".into(), plist::Value::String(library_id.clone())),
+                (
+                    "SyncedDataclasses".into(),
+                    plist::Value::Array(vec![plist::Value::String("Book".into())]),
+                ),
+                (
+                    "SyncedAssetTypes".into(),
+                    plist::Value::Array(vec![plist::Value::String("Book".into())]),
+                ),
+                ("Wakeable".into(), plist::Value::Boolean(false)),
+            ]
+            .into_iter()
+            .collect(),
+        );
+
+        let mut host_params = HashMap::new();
+        host_params.insert("HostInfo".to_string(), host_info.clone());
+        host_params.insert("LocalCloudSupport".to_string(), plist::Value::Boolean(true));
+        send_plist_frame(
+            &mut stream,
+            plist::Value::Dictionary(
+                [
+                    ("Command".into(), plist::Value::String("HostInfo".into())),
+                    ("Params".into(), plist::Value::Dictionary(host_params)),
+                    ("Session".into(), plist::Value::Integer(0.into())),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+        )
+        .await?;
+
+        let params = plist::Value::Dictionary(
+            [
+                (
+                    "DataclassAnchors".into(),
+                    plist::Value::Dictionary(HashMap::<String, plist::Value>::new()),
+                ),
+                (
+                    "Dataclasses".into(),
+                    plist::Value::Array(vec![plist::Value::String("Book".into())]),
+                ),
+                ("HostInfo".into(), host_info),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        send_plist_frame(
+            &mut stream,
+            plist::Value::Dictionary(
+                [
+                    ("Command".into(), plist::Value::String("RequestingSync".into())),
+                    ("Params".into(), params.as_dictionary().unwrap().clone().into()),
+                    ("Session".into(), plist::Value::Integer(1.into())),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+        )
+        .await?;
+
+        log("Waiting for ReadyForSync...");
+        let mut ready = false;
+        for _ in 0..30 {
+            let msg = read_plist_frame(&mut stream).await?;
+            let name = message_name(&msg);
+            if name == "ReadyForSync" {
+                ready = true;
+                break;
+            }
+            if name == "SyncFailed" {
+                bail!("AirTraffic returned SyncFailed while preparing sync");
+            }
+        }
+        if !ready {
+            bail!("AirTraffic: ReadyForSync was not received");
+        }
+
+        let sync_types = plist::Value::Dictionary(
+            [("Book".into(), plist::Value::Integer(1.into()))]
+                .into_iter()
+                .collect(),
+        );
+        send_plist_frame(
+            &mut stream,
+            plist::Value::Dictionary(
+                [
+                    ("Command".into(), plist::Value::String("MetadataSyncFinished".into())),
+                    ("Params".into(), plist::Value::Dictionary(
+                        [
+                            ("SyncTypes".into(), sync_types),
+                            (
+                                "DataclassAnchors".into(),
+                                plist::Value::Dictionary(HashMap::<String, plist::Value>::new()),
+                            ),
+                        ]
+                        .into_iter()
+                        .collect(),
+                    )),
+                    ("Session".into(), plist::Value::Integer(1.into())),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+        )
+        .await?;
+
+        log("Waiting for AssetManifest...");
+        let manifest = loop {
+            let msg = read_plist_frame(&mut stream).await?;
+            let name = message_name(&msg);
+            if name == "AssetManifest" {
+                let params = msg
+                    .as_dictionary()
+                    .and_then(|d| d.get("Params"))
+                    .and_then(|v| v.as_dictionary())
+                    .cloned()
+                    .unwrap_or_default();
+                break params.get("AssetManifest").cloned().or_else(|| params.get("Manifest").cloned());
+            }
+            if name == "SyncFailed" || name == "SyncFinished" {
+                bail!("AirTraffic terminated before AssetManifest: {name}");
+            }
+        };
+
+        let manifest = manifest.context("AssetManifest message did not contain a manifest")?;
+        let available: Vec<String> = manifest
+            .as_dictionary()
+            .and_then(|d| d.get("Book"))
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|v| v.as_dictionary())
+            .filter(|d| d.get("IsDownload").and_then(|v| v.as_boolean()).unwrap_or(false))
+            .filter_map(|d| d.get("AssetID").and_then(|v| v.as_string()).map(str::to_owned))
+            .collect();
+
+        for (ident, dest) in assets {
+            if !available.is_empty() && !available.iter().any(|x| x == ident) {
+                bail!("AirTraffic manifest does not advertise asset {ident}");
+            }
+            send_plist_frame(
+                &mut stream,
+                plist::Value::Dictionary(
+                    [
+                        ("Command".into(), plist::Value::String("AssetCompleted".into())),
+                        (
+                            "Params".into(),
+                            plist::Value::Dictionary(
+                                [
+                                    ("AssetID".into(), plist::Value::String((*ident).into())),
+                                    ("Dataclass".into(), plist::Value::String("Book".into())),
+                                    ("Destination".into(), plist::Value::String((*dest).into())),
+                                ]
+                                .into_iter()
+                                .collect(),
+                            ),
+                        ),
+                        ("Session".into(), plist::Value::Integer(1.into())),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+            )
+            .await?;
+            tokio::time::sleep(Duration::from_millis(900)).await;
+        }
+
+        Ok::<(), anyhow::Error>(())
+    })
+}
