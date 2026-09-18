@@ -12,6 +12,7 @@ use crate::flasher::{flash_passcode_theme, flash_wallet_skin};
 use crate::image_skin::PreparedSkin;
 use crate::passthm::{PasscodeTheme, parse_passthm_file};
 use crate::scanner::{SavedCard, load_saved_cards, scan_syslog_for_cards};
+use crate::wireless::pair_over_wifi;
 
 #[derive(PartialEq, Eq)]
 enum AppTab {
@@ -93,6 +94,10 @@ pub struct AirCardApp {
     task_rx: Option<Receiver<BackgroundTaskMessage>>,
     logs: Vec<String>,
     show_logs_window: bool,
+
+    // iOS 27 wireless pairing
+    wireless_pairing: bool,
+    wireless_pin: Option<String>,
 }
 
 impl AirCardApp {
@@ -135,6 +140,9 @@ impl AirCardApp {
             task_rx: None,
             logs: Vec::new(),
             show_logs_window: false,
+
+            wireless_pairing: false,
+            wireless_pin: None,
         };
 
         app.add_log("AirCard Windows v1.2.1 initialized");
@@ -154,6 +162,50 @@ impl AirCardApp {
         if self.logs.len() > 1000 {
             self.logs.remove(0);
         }
+    }
+
+    fn start_wireless_pairing(&mut self) {
+        if self.wireless_pairing || self.is_busy {
+            return;
+        }
+
+        self.wireless_pairing = true;
+        self.wireless_pin = None;
+        self.status_msg = "Waiting for iPhone on the local Wi-Fi network...".to_string();
+        self.add_log("Starting iOS 27 wireless pairing advertisement...");
+
+        let (tx, rx) = channel();
+        self.task_rx = Some(rx);
+
+        thread::spawn(move || {
+            let tx_log = tx.clone();
+            let tx_pin = tx.clone();
+            let result = pair_over_wifi(
+                move |msg| {
+                    let _ = tx_log.send(BackgroundTaskMessage::Log(msg));
+                },
+                move |pin| {
+                    let _ = tx_pin.send(BackgroundTaskMessage::Log(format!(
+                        "Remote Pairing code: {} (enter this code on the iPhone)",
+                        pin
+                    )));
+                },
+            );
+
+            match result {
+                Ok((udid, name)) => {
+                    let _ = tx.send(BackgroundTaskMessage::Done(Ok(format!(
+                        "Wi-Fi pairing completed: {} ({})",
+                        name, udid
+                    ))));
+                }
+                Err(err) => {
+                    let _ = tx.send(BackgroundTaskMessage::Done(Err(format!(
+                        "Wi-Fi pairing failed: {:#}", err
+                    ))));
+                }
+            }
+        });
     }
 
     fn refresh_devices(&mut self) {
@@ -493,6 +545,11 @@ impl AirCardApp {
                     self.status_msg = msg_str;
                 }
                 BackgroundTaskMessage::Log(log_line) => {
+                    if let Some(rest) = log_line.strip_prefix("Remote Pairing code: ") {
+                        if let Some((code, _)) = rest.split_once(' ') {
+                            self.wireless_pin = Some(code.to_string());
+                        }
+                    }
                     self.add_log(log_line);
                 }
                 BackgroundTaskMessage::CardFound { hash, name } => {
@@ -505,11 +562,15 @@ impl AirCardApp {
                 BackgroundTaskMessage::Done(res) => {
                     self.is_busy = false;
                     self.scanning_syslog = false;
+                    self.wireless_pairing = false;
                     finished = true;
                     match res {
                         Ok(ok_msg) => {
                             self.add_log(format!("Operation completed: {}", ok_msg));
-                            self.status_msg = ok_msg;
+                            self.status_msg = ok_msg.clone();
+                            if ok_msg.starts_with("Wi-Fi pairing completed:") {
+                                self.refresh_devices();
+                            }
                         }
                         Err(err_msg) => {
                             self.add_log(format!("Operation failed: {}", err_msg));
@@ -707,11 +768,33 @@ impl eframe::App for AirCardApp {
                     m3_tab(ui, &mut self.current_tab, AppTab::Help, "Help");
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let pair_btn = m3_button_outlined(
+                            ui,
+                            if self.wireless_pairing { "Pairing..." } else { "Pair Wi-Fi" }
+                        );
+                        if pair_btn && !self.wireless_pairing && !self.is_busy {
+                            self.start_wireless_pairing();
+                        }
+                        ui.add_space(4.0);
                         if m3_button_outlined(ui, "Refresh") {
                             self.refresh_devices();
                         }
                         ui.add_space(4.0);
                         let has_device = !self.devices.is_empty();
+                        if self.wireless_pairing {
+                            ui.label(
+                                egui::RichText::new("Waiting for iPhone…")
+                                    .size(11.0)
+                                    .color(md3::PRIMARY),
+                            );
+                            if let Some(pin) = &self.wireless_pin {
+                                ui.label(
+                                    egui::RichText::new(format!("Code {}", pin))
+                                        .size(11.0)
+                                        .color(md3::PRIMARY),
+                                );
+                            }
+                        }
                         draw_status_dot(ui, if has_device { md3::SUCCESS } else { md3::ERROR });
                         if has_device {
                             let name = self.devices.iter()
