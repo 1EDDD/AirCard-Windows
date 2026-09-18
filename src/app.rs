@@ -178,6 +178,9 @@ impl AirCardApp {
                         "Remote Pairing code: {} (enter this code on the iPhone)",
                         pin
                     )));
+                    let _ = tx_pin.send(BackgroundTaskMessage::Log(
+                        "PIN delivered to UI. Waiting for iPhone to continue pair-setup...".to_string()
+                    ));
                 },
             );
 
