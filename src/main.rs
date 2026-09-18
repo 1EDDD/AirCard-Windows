@@ -10,6 +10,7 @@ mod flasher;
 mod image_skin;
 mod passthm;
 mod scanner;
+mod wireless;
 
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
