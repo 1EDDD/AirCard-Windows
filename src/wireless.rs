@@ -1,6 +1,5 @@
-use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV6};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -12,9 +11,10 @@ use idevice::remote_pairing::{
 use idevice::tcp::adapter::Adapter;
 use idevice::tcp::handle::AdapterHandle;
 use idevice::{IdeviceService, RsdService};
+use idevice::provider::RsdProvider;
 use mdns_sd::{ResolvedService, ScopedIp, ServiceDaemon, ServiceEvent, ServiceInfo};
 use tokio::net::TcpListener;
-use tokio::time::{timeout, Instant};
+use tokio::time::timeout;
 
 const MODEL: &str = "Mac17,7";
 const REMOTE_PAIRING_SERVICE: &str = "_remotepairing._tcp.local.";
@@ -98,7 +98,8 @@ fn load_host_info() -> PairableHostInfo {
     dict.insert("name".into(), plist::Value::String(name));
     dict.insert("model".into(), plist::Value::String(MODEL.into()));
     dict.insert("alt_irk".into(), plist::Value::Data(info.alt_irk.to_vec()));
-    if let Ok(bytes) = plist::to_bytes_xml(&plist::Value::Dictionary(dict)) {
+    let mut bytes = Vec::new();
+    if plist::Value::Dictionary(dict).to_writer_xml(&mut bytes).is_ok() {
         let _ = std::fs::write(host_identity_path(), bytes);
     }
 
@@ -137,7 +138,9 @@ fn save_device_info(info: &WirelessDeviceInfo) -> Result<()> {
     d.insert("product_type".into(), plist::Value::String(info.product_type.clone()));
     d.insert("ios_version".into(), plist::Value::String(info.ios_version.clone()));
     d.insert("build_version".into(), plist::Value::String(info.build_version.clone()));
-    std::fs::write(device_info_path(), plist::to_bytes_xml(&plist::Value::Dictionary(d))?)
+    let mut bytes = Vec::new();
+    plist::Value::Dictionary(d).to_writer_xml(&mut bytes)?;
+    std::fs::write(device_info_path(), bytes)
         .context("Failed to save wireless device metadata")?;
     Ok(())
 }
@@ -386,7 +389,7 @@ pub async fn open_link() -> Result<WirelessLink> {
     );
 
     control.attempt_pair_verify().await?;
-    control.validate_pairing(&pairing_file).await?;
+    control.validate_pairing(&mut pairing_file).await?;
 
     let tunnel_port = control.create_tcp_listener().await?;
     let tunnel = connect_tls_psk_tunnel_native(
@@ -425,7 +428,7 @@ pub fn probe_device() -> Result<Option<WirelessDeviceInfo>> {
         .context("failed to create wireless probe runtime")?;
 
     runtime.block_on(async {
-        let mut link = open_link().await?;
+        let mut link = open_link().await.map_err(|e| anyhow::anyhow!(e.to_string()))?;
         let mut lockdown = link
             .service::<idevice::lockdown::LockdownClient>()
             .await?;
@@ -561,15 +564,11 @@ async fn rsd_service_stream(
             let mut stream = link.connect_rsd_service(name).await?;
             send_plist_frame(
                 &mut stream,
-                plist::Value::Dictionary(
-                    [
-                        ("Label".into(), plist::Value::String("aircard".into())),
-                        ("ProtocolVersion".into(), plist::Value::String("2".into())),
-                        ("Request".into(), plist::Value::String("RSDCheckin".into())),
-                    ]
-                    .into_iter()
-                    .collect(),
-                ),
+                { let mut checkin = plist::Dictionary::new();
+                checkin.insert("Label".into(), plist::Value::String("aircard".into()));
+                checkin.insert("ProtocolVersion".into(), plist::Value::String("2".into()));
+                checkin.insert("Request".into(), plist::Value::String("RSDCheckin".into()));
+                plist::Value::Dictionary(checkin) },
             )
             .await?;
             let _ = read_plist_frame(&mut stream).await?;
@@ -604,14 +603,9 @@ pub fn stage_streaming_zip_wireless(
         .await
         .context("streaming_zip_conduit is not available over the wireless RSD tunnel")?;
 
-        let request = plist::Value::Dictionary(
-            [(
-                "MediaSubdir".into(),
-                plist::Value::String(source_subdir.to_string()),
-            )]
-            .into_iter()
-            .collect(),
-        );
+        let mut request = plist::Dictionary::new();
+        request.insert("MediaSubdir".into(), plist::Value::String(source_subdir.to_string()));
+        let request = plist::Value::Dictionary(request);
         send_plist_frame(&mut stream, request).await?;
 
         let mut sent = 0usize;
@@ -643,8 +637,6 @@ where
         .context("failed to create wireless AirTraffic runtime")?;
 
     runtime.block_on(async {
-        use std::collections::HashMap;
-
         let mut link = open_link().await?;
         let mut stream = rsd_service_stream(
             &mut link,
@@ -705,9 +697,9 @@ where
             .collect(),
         );
 
-        let mut host_params = HashMap::new();
-        host_params.insert("HostInfo".to_string(), host_info.clone());
-        host_params.insert("LocalCloudSupport".to_string(), plist::Value::Boolean(true));
+        let mut host_params = plist::Dictionary::new();
+        host_params.insert("HostInfo".into(), host_info.clone());
+        host_params.insert("LocalCloudSupport".into(), plist::Value::Boolean(true));
         send_plist_frame(
             &mut stream,
             plist::Value::Dictionary(
@@ -726,7 +718,7 @@ where
             [
                 (
                     "DataclassAnchors".into(),
-                    plist::Value::Dictionary(HashMap::<String, plist::Value>::new()),
+                    plist::Value::Dictionary(plist::Dictionary::new()),
                 ),
                 (
                     "Dataclasses".into(),
