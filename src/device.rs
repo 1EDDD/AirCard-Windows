@@ -225,8 +225,12 @@ impl ActiveDeviceSession {
         } else {
             entries
                 .into_iter()
-                .find(|e| e.connection_type.eq_ignore_ascii_case("USB"))
-                .context("No connected iPhone found via USB")?
+                .find(|e| {
+                    e.connection_type.eq_ignore_ascii_case("USB")
+                        || e.connection_type.eq_ignore_ascii_case("Network")
+                        || e.connection_type.eq_ignore_ascii_case("WiFi")
+                })
+                .context("No connected iPhone found via USB or Wi-Fi")?
         };
 
         let udid = matched_entry.udid.clone();
