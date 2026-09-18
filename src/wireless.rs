@@ -551,6 +551,39 @@ async fn read_plist_frame(stream: &mut Box<dyn idevice::ReadWrite>) -> Result<pl
     Ok(plist::from_bytes(&body)?)
 }
 
+// AirTraffic's legacy ATC wire format is distinct from the generic RSD
+// plist framing used by StreamingZip. The legacy protocol prefixes a binary
+// plist with a little-endian uint32 length.
+async fn send_airtraffic_frame(
+    stream: &mut Box<dyn idevice::ReadWrite>,
+    value: plist::Value,
+) -> Result<()> {
+    use tokio::io::{AsyncWriteExt, BufWriter};
+
+    let mut body = Vec::new();
+    value.to_writer_binary(&mut body)?;
+    let len = u32::try_from(body.len()).context("AirTraffic plist frame is too large")?;
+    let mut writer = BufWriter::new(stream);
+    writer.write_all(&len.to_le_bytes()).await?;
+    writer.write_all(&body).await?;
+    writer.flush().await?;
+    Ok(())
+}
+
+async fn read_airtraffic_frame(stream: &mut Box<dyn idevice::ReadWrite>) -> Result<plist::Value> {
+    use tokio::io::AsyncReadExt;
+
+    let mut len_buf = [0u8; 4];
+    stream.read_exact(&mut len_buf).await?;
+    let len = u32::from_le_bytes(len_buf) as usize;
+    if len == 0 || len > 64 * 1024 * 1024 {
+        bail!("invalid AirTraffic plist frame length: {len}");
+    }
+    let mut body = vec![0u8; len];
+    stream.read_exact(&mut body).await?;
+    Ok(plist::from_bytes(&body)?)
+}
+
 async fn rsd_service_stream(
     link: &mut WirelessLink,
     names: &[&str],
@@ -667,7 +700,7 @@ where
         log("Waiting for SyncAllowed from iPhone...");
         let mut sync_allowed = false;
         for _ in 0..30 {
-            let msg = read_plist_frame(&mut stream).await?;
+            let msg = read_airtraffic_frame(&mut stream).await?;
             let name = message_name(&msg);
             log(&format!("AirTraffic received: {}", if name.is_empty() { "<unnamed message>" } else { &name }));
             if name == "SyncAllowed" { sync_allowed = true; break; }
@@ -690,7 +723,7 @@ where
         let host_params = dict(vec![
             ("HostInfo", host_info.clone()),
         ]);
-        send_plist_frame(&mut stream, dict(vec![
+        send_airtraffic_frame(&mut stream, dict(vec![
             ("Command", plist::Value::String("HostInfo".into())),
             ("Params", host_params),
             ("Session", plist::Value::Integer(0.into())),
@@ -706,7 +739,7 @@ where
         log("HostInfo sent. Waiting 200 ms before RequestingSync...");
         tokio::time::sleep(Duration::from_millis(200)).await;
 
-        send_plist_frame(&mut stream, dict(vec![
+        send_airtraffic_frame(&mut stream, dict(vec![
             ("Command", plist::Value::String("RequestingSync".into())),
             ("Params", params),
             ("Session", plist::Value::Integer(1.into())),
@@ -715,7 +748,7 @@ where
         log("RequestingSync sent. Waiting for ReadyForSync...");
         let mut ready = false;
         for _ in 0..30 {
-            let msg = read_plist_frame(&mut stream).await?;
+            let msg = read_airtraffic_frame(&mut stream).await?;
             let name = message_name(&msg);
             log(&format!("AirTraffic received: {}", if name.is_empty() { "<unnamed message>" } else { &name }));
             if name == "ReadyForSync" { ready = true; break; }
@@ -724,7 +757,7 @@ where
         if !ready { bail!("AirTraffic: ReadyForSync was not received"); }
 
         let sync_types = dict(vec![("Book", plist::Value::Integer(1.into()))]);
-        send_plist_frame(&mut stream, dict(vec![
+        send_airtraffic_frame(&mut stream, dict(vec![
             ("Command", plist::Value::String("MetadataSyncFinished".into())),
             ("Params", dict(vec![
                 ("SyncTypes", sync_types),
@@ -735,7 +768,7 @@ where
 
         log("Waiting for AssetManifest...");
         let manifest = loop {
-            let msg = read_plist_frame(&mut stream).await?;
+            let msg = read_airtraffic_frame(&mut stream).await?;
             let name = message_name(&msg);
             if name == "AssetManifest" {
                 let p = msg.as_dictionary().and_then(|d| d.get("Params")).and_then(|v| v.as_dictionary());
@@ -762,7 +795,7 @@ where
             if !available.is_empty() && !available.iter().any(|x| x == ident) {
                 bail!("AirTraffic manifest does not advertise asset {ident}");
             }
-            send_plist_frame(&mut stream, dict(vec![
+            send_airtraffic_frame(&mut stream, dict(vec![
                 ("Command", plist::Value::String("AssetCompleted".into())),
                 ("Params", dict(vec![
                     ("AssetID", plist::Value::String((*ident).into())),
