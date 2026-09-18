@@ -658,11 +658,24 @@ where
                 .to_string()
         };
 
-        log("Waiting for SyncAllowed from iPhone...");
+        // AirTraffic expects the host to initiate the legacy session with a
+        // Capabilities request. Apple's ATHostConnection does this internally
+        // before SyncAllowed becomes available.
+        log("Starting AirTraffic legacy handshake...");
+        let mut capabilities = plist::Dictionary::new();
+        capabilities.insert("Command".into(), plist::Value::String("Capabilities".into()));
+        capabilities.insert("Params".into(), dict(vec![
+            ("LibraryID", plist::Value::String(String::new())),
+        ]));
+        capabilities.insert("Session".into(), plist::Value::Integer(0.into()));
+        send_plist_frame(&mut stream, plist::Value::Dictionary(capabilities)).await?;
+        log("Capabilities request sent. Waiting for SyncAllowed from iPhone...");
+
         let mut sync_allowed = false;
         for _ in 0..30 {
             let msg = read_plist_frame(&mut stream).await?;
             let name = message_name(&msg);
+            log(&format!("AirTraffic received: {}", if name.is_empty() { "<unnamed message>" } else { &name }));
             if name == "SyncAllowed" { sync_allowed = true; break; }
             if name == "SyncFailed" { bail!("AirTraffic returned SyncFailed before sync started"); }
         }
