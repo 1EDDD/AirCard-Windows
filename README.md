@@ -104,3 +104,6 @@ The compiled binary will be in `target\release\aircard.exe`.
 
 
 Wireless transport development branch.
+
+
+Windows compile check.
