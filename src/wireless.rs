@@ -106,28 +106,19 @@ fn load_host_info() -> PairableHostInfo {
     info
 }
 
-fn load_pairing_file() -> Result<RpPairingFile> {
+async fn load_pairing_file() -> Result<RpPairingFile> {
     let path = pairing_path();
     if !path.is_file() {
         bail!("No saved iOS 27 wireless pairing exists yet. Tap 'Pair Wi-Fi' first.");
     }
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("failed to create pairing-file runtime")?;
-    let file = runtime
-        .block_on(RpPairingFile::read_from_file(&path))
-        .context("Failed to read saved wireless pairing file")?;
-    Ok(file)
+    RpPairingFile::read_from_file(&path)
+        .await
+        .context("Failed to read saved wireless pairing file")
 }
 
-fn save_pairing_file(file: &RpPairingFile) -> Result<()> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("failed to create pairing-file runtime")?;
-    runtime
-        .block_on(file.write_to_file(pairing_path()))
+async fn save_pairing_file(file: &RpPairingFile) -> Result<()> {
+    file.write_to_file(pairing_path())
+        .await
         .context("Failed to save iOS 27 wireless pairing file")
 }
 
@@ -261,7 +252,7 @@ where
         .context("iOS Remote Pairing handshake failed")?;
         log("iPhone completed the Remote Pairing handshake.".to_string());
 
-        save_pairing_file(&pairing_file)?;
+        save_pairing_file(&pairing_file).await?;
         let info = WirelessDeviceInfo {
             udid: peer.remotepairing_udid.clone(),
             name: peer.name.clone(),
@@ -376,7 +367,7 @@ async fn find_remote_pairing(alt_irk: &[u8]) -> Option<Addresses> {
 }
 
 pub async fn open_link() -> Result<WirelessLink> {
-    let mut pairing_file = load_pairing_file()?;
+    let mut pairing_file = load_pairing_file().await?;
     let alt_irk = pairing_file
         .alt_irk
         .as_deref()
