@@ -22,6 +22,10 @@ impl Advertisement {
     fn start(info: &PairableHostInfo, pairing_file: &RpPairingFile, port: u16) -> Result<Self> {
         let identifier = pairing_file.identifier.clone();
         let txt_records = info.mdns_txt_records(&identifier);
+        let properties: Vec<(&str, &str)> = txt_records
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str()))
+            .collect();
 
         let daemon = ServiceDaemon::new().context("failed to start mDNS daemon")?;
         daemon
@@ -36,7 +40,7 @@ impl Advertisement {
             &host,
             "",
             port,
-            txt_records,
+            &properties[..],
         )
         .context("failed to create iOS 27 wireless-pairing mDNS service")?
         .enable_addr_auto();
