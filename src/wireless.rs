@@ -87,7 +87,9 @@ fn load_host_info() -> PairableHostInfo {
                 .and_then(|d| d.get("alt_irk"))
                 .and_then(|v| v.as_data())
             {
-                info.alt_irk = data.to_vec();
+                if data.len() == 16 {
+                    info.alt_irk.copy_from_slice(data);
+                }
             }
         }
     }
@@ -95,7 +97,7 @@ fn load_host_info() -> PairableHostInfo {
     let mut dict = plist::Dictionary::new();
     dict.insert("name".into(), plist::Value::String(name));
     dict.insert("model".into(), plist::Value::String(MODEL.into()));
-    dict.insert("alt_irk".into(), plist::Value::Data(info.alt_irk.clone()));
+    dict.insert("alt_irk".into(), plist::Value::Data(info.alt_irk.to_vec()));
     if let Ok(bytes) = plist::to_bytes_xml(&plist::Value::Dictionary(dict)) {
         let _ = std::fs::write(host_identity_path(), bytes);
     }
