@@ -48,4 +48,4 @@ jobs:
           draft: false
           prerelease: false
 
-# iOS 27 Wi-Fi transport build
+# Build the iOS 27 Wi-Fi pairing transport on every main push
