@@ -106,6 +106,8 @@ impl AirCardApp {
 
         let mut app = Self {
             current_tab: AppTab::Wallet,
+            apple_status: String::new(),
+            apple_ready: false,
             devices: Vec::new(),
             selected_udid: None,
 
