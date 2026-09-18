@@ -7,7 +7,7 @@ use std::thread;
 use eframe::egui;
 
 use crate::device::DeviceInfo;
-use crate::flasher::{flash_passcode_theme, flash_wallet_skin, flash_wallet_skin_wireless};
+use crate::flasher::{flash_passcode_theme, flash_wallet_skin_wireless};
 use crate::image_skin::PreparedSkin;
 use crate::passthm::{PasscodeTheme, parse_passthm_file};
 use crate::scanner::{SavedCard, load_saved_cards};
@@ -821,11 +821,9 @@ impl eframe::App for AirCardApp {
                                 .find(|d| Some(&d.udid) == self.selected_udid.as_ref())
                                 .map(|d| d.name.clone())
                                 .unwrap_or_else(|| "iPhone".into());
-                            ui.label(egui::RichText::new(name).size(12.0).color(md3::ON_SURFACE))
-                                
+                            ui.label(egui::RichText::new(name).size(12.0).color(md3::ON_SURFACE));
                         } else {
-                            ui.label(egui::RichText::new("No iPhone").size(12.0).color(md3::ON_SURFACE_VARIANT))
-                                ;
+                            ui.label(egui::RichText::new("No iPhone").size(12.0).color(md3::ON_SURFACE_VARIANT));
                         }
                     });
                 });
@@ -1296,7 +1294,7 @@ impl AirCardApp {
                 ui.add_space(6.0);
                 ui.label(egui::RichText::new("- iPhone and PC on the same Wi-Fi network").size(11.5).color(md3::ON_SURFACE_VARIANT));
                 ui.label(egui::RichText::new("- iPhone: Settings → Developer Mode → Paired Devices").size(11.5).color(md3::ON_SURFACE_VARIANT));
-                ui.label(egui::RichText::new("- Unlock iPhone and tap \"Trust this Computer\"").size(11.5).color(md3::ON_SURFACE_VARIANT));
+                ui.label(egui::RichText::new("- Keep the iPhone unlocked while pairing").size(11.5).color(md3::ON_SURFACE_VARIANT));
 
                 ui.add_space(18.0);
 
