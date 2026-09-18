@@ -294,7 +294,6 @@ impl WirelessLink {
         self.rsd
             .connect::<T>(&mut self.handle)
             .await
-            .map_err(Into::into)
     }
 
     pub async fn connect_rsd_service(
