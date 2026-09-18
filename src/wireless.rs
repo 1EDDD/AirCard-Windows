@@ -634,9 +634,11 @@ where
 
     runtime.block_on(async {
         let mut link = open_link().await.map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        // AirTrafficHost's legacy sync path is exposed by the classic ATC
+        // shim. Prefer it over the newer ATC2 shim for the Books sync protocol.
         let mut stream = rsd_service_stream(
             &mut link,
-            &["com.apple.atc2.shim.remote", "com.apple.atc.shim.remote"],
+            &["com.apple.atc.shim.remote", "com.apple.atc2.shim.remote"],
         )
         .await
         .context("AirTraffic ATC RSD shim is not available")?;
