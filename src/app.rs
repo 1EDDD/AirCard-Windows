@@ -158,6 +158,7 @@ impl AirCardApp {
         }
 
         self.wireless_pairing = true;
+        self.is_busy = true;
         self.wireless_pin = None;
         self.status_msg = "Waiting for iPhone on the local Wi-Fi network...".to_string();
         self.add_log("Starting iOS 27 wireless pairing advertisement...");
@@ -197,6 +198,12 @@ impl AirCardApp {
     }
 
     fn refresh_devices(&mut self) {
+        if self.wireless_pairing {
+            self.add_log("Refresh blocked: wireless pairing is still in progress.");
+            self.status_msg = "Finish Wi-Fi pairing before refreshing devices.".to_string();
+            return;
+        }
+
         let mut devices = Vec::new();
 
         if has_saved_pairing() {
@@ -303,6 +310,12 @@ impl AirCardApp {
     }
 
     fn toggle_syslog_scan(&mut self) {
+        if self.wireless_pairing {
+            self.add_log("Scan blocked: wireless pairing is still in progress.");
+            self.status_msg = "Finish Wi-Fi pairing before scanning cards.".to_string();
+            return;
+        }
+
         if self.scanning_syslog {
             if let Some(flag) = self.scan_stop_flag.take() {
                 flag.store(true, Ordering::Relaxed);
@@ -356,6 +369,12 @@ impl AirCardApp {
     }
 
     fn flash_card(&mut self) {
+        if self.wireless_pairing {
+            self.add_log("Card flash blocked: wireless pairing is still in progress.");
+            self.status_msg = "Finish Wi-Fi pairing before flashing.".to_string();
+            return;
+        }
+
         let Some(udid) = self.selected_udid.clone() else {
             self.add_log("Flash failed: No connected iPhone selected.");
             self.status_msg = "Please select a connected iPhone.".to_string();
@@ -492,6 +511,12 @@ impl AirCardApp {
     }
 
     fn flash_theme(&mut self) {
+        if self.wireless_pairing {
+            self.add_log("Passcode flash blocked: wireless pairing is still in progress.");
+            self.status_msg = "Finish Wi-Fi pairing before flashing.".to_string();
+            return;
+        }
+
         let Some(udid) = self.selected_udid.clone() else {
             self.add_log("Theme flash failed: No connected iPhone selected.");
             self.status_msg = "Please select a connected iPhone.".to_string();
@@ -796,7 +821,7 @@ impl eframe::App for AirCardApp {
                             self.start_wireless_pairing();
                         }
                         ui.add_space(4.0);
-                        if m3_button_outlined(ui, "Refresh") {
+                        if m3_button_outlined(ui, "Refresh") && !self.wireless_pairing {
                             self.refresh_devices();
                         }
                         ui.add_space(4.0);
@@ -993,7 +1018,14 @@ impl AirCardApp {
                     let scan_fg = if self.scanning_syslog { md3::ERROR } else { md3::ON_PRIMARY_CONTAINER };
                     let scan_btn = egui::Button::new(egui::RichText::new(scan_label).size(12.0).color(scan_fg))
                         .fill(scan_bg).corner_radius(20).stroke(egui::Stroke::NONE);
-                    if ui.add(scan_btn).clicked() { self.toggle_syslog_scan(); }
+                    let scan_enabled = !self.wireless_pairing;
+                    let scan_resp = ui.add_enabled(scan_enabled, scan_btn);
+                    if scan_resp.clicked() {
+                        self.toggle_syslog_scan();
+                    }
+                    if !scan_enabled {
+                        scan_resp.on_disabled_hover_text("Finish Wi-Fi pairing first");
+                    }
                 });
 
                 if !self.saved_cards.is_empty() {
@@ -1045,7 +1077,7 @@ impl AirCardApp {
                 ui.label(egui::RichText::new("Write to iPhone").strong().size(12.0).color(md3::ON_SURFACE));
                 ui.add_space(4.0);
 
-                let can_flash = !self.is_busy && self.selected_udid.is_some() && !self.card_hash.trim().is_empty() && self.skin.is_some();
+                let can_flash = !self.is_busy && !self.wireless_pairing && self.selected_udid.is_some() && !self.card_hash.trim().is_empty() && self.skin.is_some();
                 let flash_btn = egui::Button::new(
                     egui::RichText::new("Apply Card Skin").strong().size(14.0)
                         .color(if can_flash { md3::ON_PRIMARY } else { md3::ON_SURFACE_VARIANT }),
@@ -1194,7 +1226,7 @@ impl AirCardApp {
                 ui.label(egui::RichText::new("Write to iPhone").strong().size(12.0).color(md3::ON_SURFACE));
                 ui.add_space(4.0);
 
-                let can_flash = !self.is_busy && self.selected_udid.is_some() && self.loaded_theme.is_some();
+                let can_flash = !self.is_busy && !self.wireless_pairing && self.selected_udid.is_some() && self.loaded_theme.is_some();
                 let flash_btn = egui::Button::new(
                     egui::RichText::new("Apply Passcode Theme").strong().size(14.0)
                         .color(if can_flash { md3::ON_PRIMARY } else { md3::ON_SURFACE_VARIANT }),
