@@ -47,3 +47,5 @@ jobs:
           generate_release_notes: true
           draft: false
           prerelease: false
+
+# iOS 27 Wi-Fi transport build
