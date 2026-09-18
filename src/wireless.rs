@@ -863,3 +863,71 @@ where
         Ok::<(), anyhow::Error>(())
     })
 }
+
+
+pub fn wireless_write_file(path: &str, data: &[u8]) -> Result<()> {
+    let path = path.to_string();
+    let data = data.to_vec();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("failed to create wireless AFC runtime")?;
+
+    runtime.block_on(async move {
+        use idevice::services::afc::opcode::AfcFopenMode;
+        use idevice::services::afc::AfcClient;
+
+        let mut link = open_link().await?;
+        let mut afc = link.service::<AfcClient>().await?;
+        let mut fd = afc.open(&path, AfcFopenMode::WrOnly).await?;
+        fd.write_entire(&data).await?;
+        fd.close().await?;
+        Ok::<(), idevice::IdeviceError>(())
+    })?;
+    Ok(())
+}
+
+pub fn wireless_read_file(path: &str) -> Result<Option<Vec<u8>>> {
+    let path = path.to_string();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("failed to create wireless AFC runtime")?;
+
+    runtime.block_on(async move {
+        use idevice::services::afc::opcode::AfcFopenMode;
+        use idevice::services::afc::AfcClient;
+
+        let mut link = open_link().await?;
+        let mut afc = link.service::<AfcClient>().await?;
+        if afc.get_file_info(&path).await.is_err() {
+            return Ok::<Option<Vec<u8>>, idevice::IdeviceError>(None);
+        }
+        let mut fd = afc.open(&path, AfcFopenMode::RdOnly).await?;
+        let data = fd.read_entire().await?;
+        fd.close().await?;
+        Ok(Some(data))
+    }).map_err(Into::into)
+}
+
+pub fn wireless_remove(path: &str, recursive: bool) -> Result<()> {
+    let path = path.to_string();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("failed to create wireless AFC runtime")?;
+
+    runtime.block_on(async move {
+        use idevice::services::afc::AfcClient;
+
+        let mut link = open_link().await?;
+        let mut afc = link.service::<AfcClient>().await?;
+        if recursive {
+            let _ = afc.remove_all(&path).await;
+        } else {
+            let _ = afc.remove(&path).await;
+        }
+        Ok::<(), idevice::IdeviceError>(())
+    })?;
+    Ok(())
+}
