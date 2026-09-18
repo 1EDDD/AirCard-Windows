@@ -249,8 +249,11 @@ impl AirCardApp {
             self.add_log("No iOS devices detected over USB or Wi-Fi.");
             self.status_msg = "No devices connected. Pair an iPhone over Wi-Fi or connect USB.".to_string();
         } else {
-            for (i, d) in self.devices.iter().enumerate() {
-                self.add_log(format!("Device #{}: {} - UDID: {}", i + 1, d, d.udid));
+            let device_logs: Vec<String> = self.devices.iter().enumerate()
+                .map(|(i, d)| format!("Device #{}: {} - UDID: {}", i + 1, d, d.udid))
+                .collect();
+            for line in device_logs {
+                self.add_log(line);
             }
             self.status_msg = format!("Found {} connected device(s)", self.devices.len());
         }
