@@ -696,7 +696,7 @@ where
             value
                 .as_dictionary()
                 .and_then(|d| d.get("Session").or_else(|| d.get("SessionNumber")))
-                .and_then(|v| v.as_unsigned().or_else(|| v.as_integer().and_then(|n| u64::try_from(n).ok())))
+                .and_then(|v| v.as_unsigned_integer().or_else(|| v.as_signed_integer().and_then(|n| u64::try_from(n).ok())))
         };
 
         // Apple's ATHostConnection tracks the current ATC session. The
@@ -781,7 +781,7 @@ where
                 ("SyncTypes", sync_types),
                 ("DataclassAnchors", dict(vec![])),
             ])),
-            ("Session", plist::Value::Integer(1.into())),
+            ("Session", plist::Value::Integer((atc_session as i64).into())),
         ])).await?;
 
         log("Waiting for AssetManifest...");
