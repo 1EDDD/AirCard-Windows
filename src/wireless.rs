@@ -692,21 +692,39 @@ where
                 .unwrap_or("")
                 .to_string()
         };
+        let message_session = |value: &plist::Value| {
+            value
+                .as_dictionary()
+                .and_then(|d| d.get("Session").or_else(|| d.get("SessionNumber")))
+                .and_then(|v| v.as_unsigned().or_else(|| v.as_integer().and_then(|n| u64::try_from(n).ok())))
+        };
 
-        // Apple's ATHostConnection creates the legacy AirTraffic session and
-        // the device sends its initial messages (including SyncAllowed) first.
-        // Do not send a synthetic Capabilities command here.
+        // Apple's ATHostConnection tracks the current ATC session. The
+        // session number belongs to the received ATC messages and must be
+        // echoed by subsequent HostInfo/sync messages rather than hardcoding
+        // 0/1 as if this were the generic RSD protocol.
         log("Starting AirTraffic legacy handshake...");
         log("Waiting for SyncAllowed from iPhone...");
         let mut sync_allowed = false;
+        let mut atc_session: u64 = 0;
         for _ in 0..30 {
             let msg = read_airtraffic_frame(&mut stream).await?;
             let name = message_name(&msg);
-            log(&format!("AirTraffic received: {}", if name.is_empty() { "<unnamed message>" } else { &name }));
+            if let Some(session) = message_session(&msg) {
+                atc_session = session;
+                log(&format!(
+                    "AirTraffic received: {} (session {})",
+                    if name.is_empty() { "<unnamed message>" } else { &name },
+                    session
+                ));
+            } else {
+                log(&format!("AirTraffic received: {}", if name.is_empty() { "<unnamed message>" } else { &name }));
+            }
             if name == "SyncAllowed" { sync_allowed = true; break; }
             if name == "SyncFailed" { bail!("AirTraffic returned SyncFailed before sync started"); }
         }
         if !sync_allowed { bail!("AirTraffic: SyncAllowed was not received"); }
+        log(&format!("Using AirTraffic session {} for HostInfo and sync.", atc_session));
 
         let library_id = uuid::Uuid::new_v4().to_string();
         let host_info = dict(vec![
@@ -726,7 +744,7 @@ where
         send_airtraffic_frame(&mut stream, dict(vec![
             ("Command", plist::Value::String("HostInfo".into())),
             ("Params", host_params),
-            ("Session", plist::Value::Integer(0.into())),
+            ("Session", plist::Value::Integer((atc_session as i64).into())),
         ])).await?;
 
         let params = dict(vec![
@@ -742,7 +760,7 @@ where
         send_airtraffic_frame(&mut stream, dict(vec![
             ("Command", plist::Value::String("RequestingSync".into())),
             ("Params", params),
-            ("Session", plist::Value::Integer(1.into())),
+            ("Session", plist::Value::Integer((atc_session as i64).into())),
         ])).await?;
 
         log("RequestingSync sent. Waiting for ReadyForSync...");
