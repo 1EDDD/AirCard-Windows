@@ -7,9 +7,9 @@ license = "MIT"
 
 [dependencies]
 anyhow = "1.0"
-idevice = { version = "0.1.65", features = ["remote_pairing", "mdns", "tcp"] }
+idevice = { version = "0.1.65", features = ["remote_pairing", "mdns", "tcp", "rsd", "afc", "syslog_relay", "tunnel_tcp_stack"] }
 mdns-sd = "0.20"
-tokio = { version = "1.53", features = ["rt-multi-thread", "net"] }
+tokio = { version = "1.53", features = ["rt-multi-thread", "net", "time", "sync"] }
 uuid = { version = "1.24", features = ["v4"] }
 base64 = "0.23"
 eframe = { version = "0.33", default-features = false, features = ["default_fonts", "accesskit", "wgpu"] }

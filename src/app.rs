@@ -12,7 +12,7 @@ use crate::flasher::{flash_passcode_theme, flash_wallet_skin};
 use crate::image_skin::PreparedSkin;
 use crate::passthm::{PasscodeTheme, parse_passthm_file};
 use crate::scanner::{SavedCard, load_saved_cards, scan_syslog_for_cards};
-use crate::wireless::pair_over_wifi;
+use crate::wireless::{has_saved_pairing, pair_over_wifi, probe_device, scan_syslog_for_cards_wireless};
 
 #[derive(PartialEq, Eq)]
 enum AppTab {
@@ -149,9 +149,7 @@ impl AirCardApp {
         app.add_log(format!("Apple Support Runtime: {}", if app.apple_ready { "Loaded and operational" } else { "Not found (iTunes required)" }));
         app.add_log(format!("Loaded {} saved card(s) from database", app.saved_cards.len()));
 
-        if app.apple_ready {
-            app.refresh_devices();
-        }
+        app.refresh_devices();
 
         app
     }
@@ -209,30 +207,52 @@ impl AirCardApp {
     }
 
     fn refresh_devices(&mut self) {
-        self.add_log("Scanning for connected iOS devices via usbmuxd...");
-        match list_connected_devices() {
-            Ok(devs) => {
-                self.devices = devs;
-                if self.selected_udid.is_none() && !self.devices.is_empty() {
-                    self.selected_udid = Some(self.devices[0].udid.clone());
-                }
-                if self.devices.is_empty() {
-                    self.add_log("No devices detected. Please plug in your iPhone and tap 'Trust this Computer'.");
-                    self.status_msg = "No devices connected via USB.".to_string();
-                } else {
-                    let dev_logs: Vec<String> = self.devices.iter().enumerate().map(|(i, d)| {
-                        format!("Device #{}: {} - UDID: {}", i + 1, d, d.udid)
-                    }).collect();
-                    for line in dev_logs {
-                        self.add_log(line);
-                    }
-                    self.status_msg = format!("Found {} connected device(s)", self.devices.len());
-                }
+        let mut devices = Vec::new();
+
+        if self.apple_ready {
+            self.add_log("Scanning for connected iOS devices via usbmuxd...");
+            match list_connected_devices() {
+                Ok(mut devs) => devices.append(&mut devs),
+                Err(err) => self.add_log(format!("USB device scan unavailable: {}", err)),
             }
-            Err(err) => {
-                self.add_log(format!("Device scan error: {}", err));
-                self.status_msg = format!("Could not enumerate devices: {}", err);
+        }
+
+        if has_saved_pairing() {
+            self.add_log("Checking saved iOS 27 wireless pairing...");
+            match probe_device() {
+                Ok(Some(info)) => {
+                    self.add_log(format!(
+                        "Wireless device: {} - UDID: {}",
+                        info.name, info.udid
+                    ));
+                    devices.push(DeviceInfo {
+                        udid: info.udid,
+                        name: info.name,
+                        product_type: info.product_type,
+                        ios_version: info.ios_version,
+                        build_version: info.build_version,
+                    });
+                }
+                Ok(None) => {}
+                Err(err) => self.add_log(format!("Wireless device not reachable: {}", err)),
             }
+        }
+
+        devices.sort_by(|a, b| a.udid.cmp(&b.udid));
+        self.devices = devices;
+
+        if self.selected_udid.as_ref().is_none_or(|u| !self.devices.iter().any(|d| &d.udid == u)) {
+            self.selected_udid = self.devices.first().map(|d| d.udid.clone());
+        }
+
+        if self.devices.is_empty() {
+            self.add_log("No iOS devices detected over USB or Wi-Fi.");
+            self.status_msg = "No devices connected. Pair an iPhone over Wi-Fi or connect USB.".to_string();
+        } else {
+            for (i, d) in self.devices.iter().enumerate() {
+                self.add_log(format!("Device #{}: {} - UDID: {}", i + 1, d, d.udid));
+            }
+            self.status_msg = format!("Found {} connected device(s)", self.devices.len());
         }
     }
 
@@ -321,16 +341,33 @@ impl AirCardApp {
         thread::spawn(move || {
             let tx_card = tx.clone();
             let tx_log = tx.clone();
-            let res = scan_syslog_for_cards(
-                udid.as_deref(),
-                stop_flag,
-                move |hash, name| {
-                    let _ = tx_card.send(BackgroundTaskMessage::CardFound { hash, name });
-                },
-                move |msg| {
-                    let _ = tx_log.send(BackgroundTaskMessage::Log(msg));
-                },
-            );
+            let wireless_selected = has_saved_pairing()
+                && crate::wireless::load_saved_device_info()
+                    .map(|d| Some(d.udid) == udid)
+                    .unwrap_or(false);
+
+            let res = if wireless_selected {
+                scan_syslog_for_cards_wireless(
+                    stop_flag,
+                    move |hash, name| {
+                        let _ = tx_card.send(BackgroundTaskMessage::CardFound { hash, name });
+                    },
+                    move |msg| {
+                        let _ = tx_log.send(BackgroundTaskMessage::Log(msg));
+                    },
+                )
+            } else {
+                scan_syslog_for_cards(
+                    udid.as_deref(),
+                    stop_flag,
+                    move |hash, name| {
+                        let _ = tx_card.send(BackgroundTaskMessage::CardFound { hash, name });
+                    },
+                    move |msg| {
+                        let _ = tx_log.send(BackgroundTaskMessage::Log(msg));
+                    },
+                )
+            };
             match res {
                 Ok(()) => {
                     let _ = tx.send(BackgroundTaskMessage::Done(Ok("Syslog scan finished".into())));
