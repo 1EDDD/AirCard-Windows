@@ -252,12 +252,7 @@ where
         let peer = timeout(
             Duration::from_secs(120),
             host.accept(&mut pairing_file, |code| {
-                log(format!(
-                    "Remote Pairing PIN generated: {}. PIN callback reached; pair-setup will continue.",
-                    code
-                ));
                 pin(code);
-                log("PIN callback returned to Remote Pairing state machine.".to_string());
                 async {}
             }),
         )
