@@ -406,7 +406,7 @@ pub async fn open_link() -> Result<WirelessLink> {
     let mut adapter = Adapter::new(Box::new(tunnel.into_inner()), client_ip, server_ip);
     adapter.set_mss(mtu.saturating_sub(60));
 
-    let handle = adapter.to_async_handle();
+    let mut handle = adapter.to_async_handle();
     let rsd = idevice::rsd::RsdHandshake::new(handle.connect(rsd_port).await?).await?;
 
     Ok(WirelessLink {
@@ -592,7 +592,7 @@ pub fn stage_streaming_zip_wireless(
     runtime.block_on(async {
         use tokio::io::AsyncWriteExt;
 
-        let mut link = open_link().await?;
+        let mut link = open_link().await.map_err(|e| anyhow::anyhow!(e.to_string()))?;
         let mut stream = rsd_service_stream(
             &mut link,
             &[
@@ -775,7 +775,7 @@ where
                             ("SyncTypes".into(), sync_types),
                             (
                                 "DataclassAnchors".into(),
-                                plist::Value::Dictionary(HashMap::<String, plist::Value>::new()),
+                                plist::Value::Dictionary(plist::Dictionary::new()),
                             ),
                         ]
                         .into_iter()
