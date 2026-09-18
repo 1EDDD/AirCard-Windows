@@ -8,7 +8,7 @@ use eframe::egui;
 
 use crate::apple;
 use crate::device::{DeviceInfo, list_connected_devices};
-use crate::flasher::{flash_passcode_theme, flash_wallet_skin};
+use crate::flasher::{flash_passcode_theme, flash_wallet_skin, flash_wallet_skin_wireless};
 use crate::image_skin::PreparedSkin;
 use crate::passthm::{PasscodeTheme, parse_passthm_file};
 use crate::scanner::{SavedCard, load_saved_cards, scan_syslog_for_cards};
@@ -398,6 +398,10 @@ impl AirCardApp {
         };
 
         let png_bytes = skin.png.clone();
+        let wireless_selected = has_saved_pairing()
+            && crate::wireless::load_saved_device_info()
+                .map(|d| d.udid == udid)
+                .unwrap_or(false);
         if let Some(ref flag) = self.scan_stop_flag {
             flag.store(true, std::sync::atomic::Ordering::Relaxed);
         }
@@ -415,21 +419,38 @@ impl AirCardApp {
         thread::spawn(move || {
             let tx_progress = tx.clone();
             let tx_log = tx.clone();
-            let res = flash_wallet_skin(
-                &udid,
-                &hash,
-                &png_bytes,
-                move |step, total, msg| {
+            let res = if wireless_selected {
+                flash_wallet_skin_wireless(
+                    &hash,
+                    &png_bytes,
+                    move |step, total, msg| {
                     let _ = tx_progress.send(BackgroundTaskMessage::Progress {
                         step,
                         total,
                         message: msg.to_string(),
                     });
-                },
-                move |msg| {
-                    let _ = tx_log.send(BackgroundTaskMessage::Log(msg.to_string()));
-                },
-            );
+                    },
+                    move |msg| {
+                        let _ = tx_log.send(BackgroundTaskMessage::Log(msg.to_string()));
+                    },
+                )
+            } else {
+                flash_wallet_skin(
+                    &udid,
+                    &hash,
+                    &png_bytes,
+                    move |step, total, msg| {
+                        let _ = tx_progress.send(BackgroundTaskMessage::Progress {
+                            step,
+                            total,
+                            message: msg.to_string(),
+                        });
+                    },
+                    move |msg| {
+                        let _ = tx_log.send(BackgroundTaskMessage::Log(msg.to_string()));
+                    },
+                )
+            };
 
             match res {
                 Ok(()) => {
