@@ -11,6 +11,7 @@ use crate::airlift::{
 };
 use crate::airtraffic::sync_assets_via_airtraffic;
 use crate::device::ActiveDeviceSession;
+use crate::wireless::{stage_streaming_zip_wireless, sync_assets_via_airtraffic_wireless, wireless_read_file, wireless_remove, wireless_write_file};
 
 pub const TARGET_WALLET_ASSETS: &[&str] = &[
     "cardBackgroundCombined@3x.png",
@@ -204,5 +205,132 @@ where
     }
 
     log("Passcode theme successfully written! Lock iPhone to see new keypad.");
+    Ok(())
+}
+
+
+/// Flash the Wallet skin using only the iOS 27 Remote Pairing/RSD transport.
+/// This mirrors the existing USB staging flow: StreamingZip creates the staged
+/// link/payload objects, AFC updates Books/Sync/Books.plist, and the ATC RSD
+/// shim completes the Book asset sync.
+pub fn flash_wallet_skin_wireless<F, L>(
+    card_hash: &str,
+    skin_png: &[u8],
+    mut progress: F,
+    mut log: L,
+) -> Result<()>
+where
+    F: FnMut(usize, usize, &str),
+    L: FnMut(&str),
+{
+    let pkpass_dir = format!("/var/mobile/Library/Passes/Cards/{}.pkpass", card_hash);
+    log(&format!("Wireless target Card Hash: {}", card_hash));
+    log(&format!("Wireless skin payload size: {} bytes PNG", skin_png.len()));
+
+    let original_books = wireless_read_file("Books/Sync/Books.plist")?;
+    let total_steps = TARGET_WALLET_ASSETS.len() + 2 * CACHE_FILES.len();
+    let mut step = 0;
+
+    let result = (|| -> Result<()> {
+        for asset in TARGET_WALLET_ASSETS {
+            step += 1;
+            progress(step, total_steps, &format!("Writing {} over Wi-Fi...", asset));
+
+            let token = generate_token();
+            let source = format!("{}{}", SOURCE_PREFIX, token);
+            let link_dest = format!("{}{}", LINK_PREFIX, token);
+            let recovered = format!("{}{}", RECOVERED_PREFIX, token);
+            let link_ident = format!("../../{}/p0/p1/p2/link", source);
+            let payload_ident = format!("../../{}/payload", source);
+            let target_dest = format!("{}/{}", link_dest, asset);
+            let assets_to_sync = [
+                (link_ident.as_str(), link_dest.as_str()),
+                (payload_ident.as_str(), target_dest.as_str()),
+            ];
+
+            let books_plist = build_books_plist(
+                &[link_ident.clone(), payload_ident.clone()]
+            ).context("Failed to build wireless Books.plist")?;
+            let archive = build_streaming_zip_archive(&pkpass_dir, skin_png)
+                .context("Failed to build wireless StreamingZip archive")?;
+
+            log(&format!(
+                "[{}/{}] Staging {} bytes through StreamingZip RSD shim...",
+                step,
+                total_steps,
+                archive.len()
+            ));
+            stage_streaming_zip_wireless(&source, &archive)
+                .context("Wireless StreamingZip staging failed")?;
+
+            wireless_write_file("Books/Sync/Books.plist", &books_plist)
+                .context("Failed to write Books/Sync/Books.plist over Wi-Fi")?;
+
+            log(&format!(
+                "[{}/{}] Syncing {} through AirTraffic RSD shim...",
+                step, total_steps, asset
+            ));
+            sync_assets_via_airtraffic_wireless(&assets_to_sync, &mut log)
+                .context("Wireless AirTraffic sync failed")?;
+
+            wireless_remove(&link_dest, true)?;
+            wireless_remove(&recovered, true)?;
+            wireless_remove(&source, true)?;
+            std::thread::sleep(Duration::from_millis(400));
+        }
+
+        for ext in [".cache", ".pkcache"] {
+            let cache_dir = format!("/var/mobile/Library/Passes/Cards/{}{}", card_hash, ext);
+            for leaf in CACHE_FILES {
+                step += 1;
+                progress(step, total_steps, &format!("Clearing {}/{} over Wi-Fi...", ext, leaf));
+                log(&format!(
+                    "[{}/{}] Clearing cache {}/{}...",
+                    step, total_steps, ext, leaf
+                ));
+
+                let token = generate_token();
+                let source = format!("{}{}", SOURCE_PREFIX, token);
+                let link_dest = format!("{}{}", LINK_PREFIX, token);
+                let recovered = format!("{}{}", RECOVERED_PREFIX, token);
+                let link_ident = format!("../../{}/p0/p1/p2/link", source);
+                let payload_ident = format!("../../{}/payload", source);
+                let target_dest = format!("{}/{}", link_dest, leaf);
+                let assets_to_sync = [
+                    (link_ident.as_str(), link_dest.as_str()),
+                    (payload_ident.as_str(), target_dest.as_str()),
+                ];
+                let books_plist = build_books_plist(&[link_ident, payload_ident])?;
+                let archive = build_streaming_zip_archive(&cache_dir, b"corrupted")?;
+
+                stage_streaming_zip_wireless(&source, &archive)?;
+                wireless_write_file("Books/Sync/Books.plist", &books_plist)?;
+                sync_assets_via_airtraffic_wireless(&assets_to_sync, &mut log)?;
+
+                wireless_remove(&link_dest, true)?;
+                wireless_remove(&recovered, true)?;
+                wireless_remove(&source, true)?;
+            }
+        }
+
+        Ok(())
+    })();
+
+    match original_books {
+        Some(bytes) => {
+            let _ = wireless_write_file("Books/Sync/Books.plist", &bytes);
+        }
+        None => {
+            let _ = wireless_remove("Books/Sync/Books.plist", false);
+        }
+    }
+
+    if let Err(e) = &result {
+        log(&format!("Wireless Wallet flash failed: {e:#}"));
+    }
+
+    result?;
+    progress(total_steps, total_steps, "Card skin updated successfully over Wi-Fi!");
+    log("Wireless Wallet skin write finished! Close and reopen Wallet on iPhone.");
     Ok(())
 }
