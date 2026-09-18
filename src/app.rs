@@ -6,12 +6,11 @@ use std::thread;
 
 use eframe::egui;
 
-use crate::apple;
-use crate::device::{DeviceInfo, list_connected_devices};
-use crate::flasher::{flash_passcode_theme, flash_wallet_skin, flash_wallet_skin_wireless};
+use crate::device::DeviceInfo;
+use crate::flasher::{flash_passcode_theme, flash_wallet_skin_wireless};
 use crate::image_skin::PreparedSkin;
 use crate::passthm::{PasscodeTheme, parse_passthm_file};
-use crate::scanner::{SavedCard, load_saved_cards, scan_syslog_for_cards};
+use crate::scanner::{SavedCard, load_saved_cards};
 use crate::wireless::{has_saved_pairing, pair_over_wifi, probe_device, scan_syslog_for_cards_wireless};
 
 #[derive(PartialEq, Eq)]
@@ -105,16 +104,8 @@ impl AirCardApp {
         setup_custom_fonts(&cc.egui_ctx);
         setup_custom_theme(&cc.egui_ctx);
 
-        let (apple_ready, apple_status) = match apple::verify_support() {
-            Ok(msg) => (true, msg),
-            Err(err) => (false, err.to_string()),
-        };
-
         let mut app = Self {
             current_tab: AppTab::Wallet,
-            apple_status,
-            apple_ready,
-
             devices: Vec::new(),
             selected_udid: None,
 
@@ -136,7 +127,7 @@ impl AirCardApp {
             progress_step: 0,
             progress_total: 0,
             progress_msg: String::new(),
-            status_msg: "Ready. Connect iPhone via USB and unlock it.".to_string(),
+            status_msg: "Ready. Pair your iPhone over Wi-Fi.".to_string(),
             task_rx: None,
             logs: Vec::new(),
             show_logs_window: false,
@@ -146,7 +137,6 @@ impl AirCardApp {
         };
 
         app.add_log("AirCard Windows v1.2.1 initialized");
-        app.add_log(format!("Apple Support Runtime: {}", if app.apple_ready { "Loaded and operational" } else { "Not found (iTunes required)" }));
         app.add_log(format!("Loaded {} saved card(s) from database", app.saved_cards.len()));
 
         app.refresh_devices();
@@ -209,14 +199,6 @@ impl AirCardApp {
     fn refresh_devices(&mut self) {
         let mut devices = Vec::new();
 
-        if self.apple_ready {
-            self.add_log("Scanning for connected iOS devices via usbmuxd...");
-            match list_connected_devices() {
-                Ok(mut devs) => devices.append(&mut devs),
-                Err(err) => self.add_log(format!("USB device scan unavailable: {}", err)),
-            }
-        }
-
         if has_saved_pairing() {
             self.add_log("Checking saved iOS 27 wireless pairing...");
             match probe_device() {
@@ -246,8 +228,8 @@ impl AirCardApp {
         }
 
         if self.devices.is_empty() {
-            self.add_log("No iOS devices detected over USB or Wi-Fi.");
-            self.status_msg = "No devices connected. Pair an iPhone over Wi-Fi or connect USB.".to_string();
+            self.add_log("No iOS device detected over Wi-Fi.");
+            self.status_msg = "No iPhone connected. Tap Pair Wi-Fi on the iPhone.".to_string();
         } else {
             let device_logs: Vec<String> = self.devices.iter().enumerate()
                 .map(|(i, d)| format!("Device #{}: {} - UDID: {}", i + 1, d, d.udid))
@@ -360,16 +342,7 @@ impl AirCardApp {
                     },
                 )
             } else {
-                scan_syslog_for_cards(
-                    udid.as_deref(),
-                    stop_flag,
-                    move |hash, name| {
-                        let _ = tx_card.send(BackgroundTaskMessage::CardFound { hash, name });
-                    },
-                    move |msg| {
-                        let _ = tx_log.send(BackgroundTaskMessage::Log(msg));
-                    },
-                )
+                Err(anyhow::anyhow!("No saved Wi-Fi pairing matches the selected iPhone"))
             };
             match res {
                 Ok(()) => {
@@ -427,22 +400,6 @@ impl AirCardApp {
                     &hash,
                     &png_bytes,
                     move |step, total, msg| {
-                    let _ = tx_progress.send(BackgroundTaskMessage::Progress {
-                        step,
-                        total,
-                        message: msg.to_string(),
-                    });
-                    },
-                    move |msg| {
-                        let _ = tx_log.send(BackgroundTaskMessage::Log(msg.to_string()));
-                    },
-                )
-            } else {
-                flash_wallet_skin(
-                    &udid,
-                    &hash,
-                    &png_bytes,
-                    move |step, total, msg| {
                         let _ = tx_progress.send(BackgroundTaskMessage::Progress {
                             step,
                             total,
@@ -453,6 +410,8 @@ impl AirCardApp {
                         let _ = tx_log.send(BackgroundTaskMessage::Log(msg.to_string()));
                     },
                 )
+            } else {
+                Err(anyhow::anyhow!("No saved Wi-Fi pairing matches the selected iPhone"))
             };
 
             match res {
@@ -862,11 +821,9 @@ impl eframe::App for AirCardApp {
                                 .find(|d| Some(&d.udid) == self.selected_udid.as_ref())
                                 .map(|d| d.name.clone())
                                 .unwrap_or_else(|| "iPhone".into());
-                            ui.label(egui::RichText::new(name).size(12.0).color(md3::ON_SURFACE))
-                                .on_hover_text(&self.apple_status);
+                            ui.label(egui::RichText::new(name).size(12.0).color(md3::ON_SURFACE));
                         } else {
-                            ui.label(egui::RichText::new("No device").size(12.0).color(md3::ON_SURFACE_VARIANT))
-                                .on_hover_text(&self.apple_status);
+                            ui.label(egui::RichText::new("No iPhone").size(12.0).color(md3::ON_SURFACE_VARIANT));
                         }
                     });
                 });
@@ -1335,9 +1292,9 @@ impl AirCardApp {
 
                 ui.label(egui::RichText::new("Prerequisites").strong().size(12.0).color(md3::ON_SURFACE));
                 ui.add_space(6.0);
-                ui.label(egui::RichText::new("- 64-bit iTunes or Apple Mobile Device Support installed").size(11.5).color(md3::ON_SURFACE_VARIANT));
-                ui.label(egui::RichText::new("- Connect iPhone via USB-C or Lightning cable").size(11.5).color(md3::ON_SURFACE_VARIANT));
-                ui.label(egui::RichText::new("- Unlock iPhone and tap \"Trust this Computer\"").size(11.5).color(md3::ON_SURFACE_VARIANT));
+                ui.label(egui::RichText::new("- iPhone and PC on the same Wi-Fi network").size(11.5).color(md3::ON_SURFACE_VARIANT));
+                ui.label(egui::RichText::new("- iPhone: Settings → Developer Mode → Paired Devices").size(11.5).color(md3::ON_SURFACE_VARIANT));
+                ui.label(egui::RichText::new("- Keep the iPhone unlocked while pairing").size(11.5).color(md3::ON_SURFACE_VARIANT));
 
                 ui.add_space(18.0);
 
