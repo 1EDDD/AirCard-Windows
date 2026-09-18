@@ -101,3 +101,6 @@ The compiled binary will be in `target\release\aircard.exe`.
 ## Credits
 - Core exploit based on `airlift` (AirTraffic sync escape).
 - Theme format inspired by [Cowabunga](https://github.com/leminlimez/Cowabunga) and [Nugget](https://github.com/leminlimez/Nugget).
+
+
+Wireless transport development branch.
