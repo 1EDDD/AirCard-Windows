@@ -193,15 +193,10 @@ impl AirCardApp {
             );
 
             match result {
-                Ok(result) => {
-                    let saved = result
-                        .pairing_file_path
-                        .as_ref()
-                        .map(|p| p.display().to_string())
-                        .unwrap_or_else(|| "memory only".into());
+                Ok((udid, name)) => {
                     let _ = tx.send(BackgroundTaskMessage::Done(Ok(format!(
-                        "Wi-Fi pairing completed: {} ({}) | RPPairing: {}",
-                        result.name, result.udid, saved
+                        "Wi-Fi pairing completed: {} ({})",
+                        name, udid
                     ))));
                 }
                 Err(err) => {
