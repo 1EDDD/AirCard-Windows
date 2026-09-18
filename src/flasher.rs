@@ -300,7 +300,7 @@ where
                     (link_ident.as_str(), link_dest.as_str()),
                     (payload_ident.as_str(), target_dest.as_str()),
                 ];
-                let books_plist = build_books_plist(&[link_ident, payload_ident])?;
+                let books_plist = build_books_plist(&[link_ident.clone(), payload_ident.clone()])?;
                 let archive = build_streaming_zip_archive(&cache_dir, b"corrupted")?;
 
                 stage_streaming_zip_wireless(&source, &archive)?;
