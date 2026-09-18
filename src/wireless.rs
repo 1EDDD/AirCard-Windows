@@ -658,19 +658,11 @@ where
                 .to_string()
         };
 
-        // AirTraffic expects the host to initiate the legacy session with a
-        // Capabilities request. Apple's ATHostConnection does this internally
-        // before SyncAllowed becomes available.
+        // Apple's ATHostConnection creates the legacy AirTraffic session and
+        // the device sends its initial messages (including SyncAllowed) first.
+        // Do not send a synthetic Capabilities command here.
         log("Starting AirTraffic legacy handshake...");
-        let mut capabilities = plist::Dictionary::new();
-        capabilities.insert("Command".into(), plist::Value::String("Capabilities".into()));
-        capabilities.insert("Params".into(), dict(vec![
-            ("LibraryID", plist::Value::String(String::new())),
-        ]));
-        capabilities.insert("Session".into(), plist::Value::Integer(0.into()));
-        send_plist_frame(&mut stream, plist::Value::Dictionary(capabilities)).await?;
-        log("Capabilities request sent. Waiting for SyncAllowed from iPhone...");
-
+        log("Waiting for SyncAllowed from iPhone...");
         let mut sync_allowed = false;
         for _ in 0..30 {
             let msg = read_plist_frame(&mut stream).await?;
@@ -695,7 +687,6 @@ where
 
         let host_params = dict(vec![
             ("HostInfo", host_info.clone()),
-            ("LocalCloudSupport", plist::Value::Boolean(true)),
         ]);
         send_plist_frame(&mut stream, dict(vec![
             ("Command", plist::Value::String("HostInfo".into())),
@@ -708,17 +699,23 @@ where
             ("Dataclasses", plist::Value::Array(vec![plist::Value::String("Book".into())])),
             ("HostInfo", host_info),
         ]);
+        // Match Apple's AirTrafficHost timing: give the device a short
+        // interval after HostInfo before issuing the sync request.
+        log("HostInfo sent. Waiting 200 ms before RequestingSync...");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
         send_plist_frame(&mut stream, dict(vec![
             ("Command", plist::Value::String("RequestingSync".into())),
             ("Params", params),
             ("Session", plist::Value::Integer(1.into())),
         ])).await?;
 
-        log("Waiting for ReadyForSync...");
+        log("RequestingSync sent. Waiting for ReadyForSync...");
         let mut ready = false;
         for _ in 0..30 {
             let msg = read_plist_frame(&mut stream).await?;
             let name = message_name(&msg);
+            log(&format!("AirTraffic received: {}", if name.is_empty() { "<unnamed message>" } else { &name }));
             if name == "ReadyForSync" { ready = true; break; }
             if name == "SyncFailed" { bail!("AirTraffic returned SyncFailed while preparing sync"); }
         }
