@@ -348,10 +348,10 @@ fn address(service: &ResolvedService) -> Option<Addresses> {
 async fn find_remote_pairing(alt_irk: &[u8]) -> Option<Addresses> {
     let daemon = ServiceDaemon::new().ok()?;
     let receiver = daemon.browse(REMOTE_PAIRING_SERVICE).ok()?;
-    let deadline = Instant::now() + BROWSE_TIMEOUT;
+    let deadline = tokio::time::Instant::now() + BROWSE_TIMEOUT;
 
     let found = loop {
-        match timeout_at(deadline, receiver.recv_async()).await {
+        match tokio::time::timeout_at(deadline, receiver.recv_async()).await {
             Ok(Ok(ServiceEvent::ServiceResolved(service))) => {
                 let identifier = service.get_property_val_str("identifier")?;
                 let auth_tag = service.get_property_val_str("authTag")?;
@@ -521,9 +521,6 @@ where
     })
 }
 
-async fn timeout_at(deadline: Instant, fut: impl std::future::Future<Output = Result<ServiceEvent, mdns_sd::RecvError>>) -> Result<Result<ServiceEvent, mdns_sd::RecvError>, tokio::time::error::Elapsed> {
-    timeout(deadline.saturating_duration_since(Instant::now()), fut).await
-}
 
 
 async fn send_plist_frame(
