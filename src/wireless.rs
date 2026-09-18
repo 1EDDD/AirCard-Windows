@@ -637,7 +637,7 @@ where
         .context("failed to create wireless AirTraffic runtime")?;
 
     runtime.block_on(async {
-        let mut link = open_link().await?;
+        let mut link = open_link().await.map_err(|e| anyhow::anyhow!(e.to_string()))?;
         let mut stream = rsd_service_stream(
             &mut link,
             &["com.apple.atc2.shim.remote", "com.apple.atc.shim.remote"],
@@ -645,14 +645,18 @@ where
         .await
         .context("AirTraffic ATC RSD shim is not available")?;
 
+        fn dict(entries: Vec<(&str, plist::Value)>) -> plist::Value {
+            let mut d = plist::Dictionary::new();
+            for (k, v) in entries {
+                d.insert(k.to_string(), v);
+            }
+            plist::Value::Dictionary(d)
+        }
+
         let message_name = |value: &plist::Value| {
             value
                 .as_dictionary()
-                .and_then(|d| {
-                    d.get("Command")
-                        .or_else(|| d.get("MessageName"))
-                        .or_else(|| d.get("Name"))
-                })
+                .and_then(|d| d.get("Command").or_else(|| d.get("MessageName")).or_else(|| d.get("Name")))
                 .and_then(|v| v.as_string())
                 .unwrap_or("")
                 .to_string()
@@ -663,144 +667,71 @@ where
         for _ in 0..30 {
             let msg = read_plist_frame(&mut stream).await?;
             let name = message_name(&msg);
-            if name == "SyncAllowed" {
-                sync_allowed = true;
-                break;
-            }
-            if name == "SyncFailed" {
-                bail!("AirTraffic returned SyncFailed before sync started");
-            }
+            if name == "SyncAllowed" { sync_allowed = true; break; }
+            if name == "SyncFailed" { bail!("AirTraffic returned SyncFailed before sync started"); }
         }
-        if !sync_allowed {
-            bail!("AirTraffic: SyncAllowed was not received");
-        }
+        if !sync_allowed { bail!("AirTraffic: SyncAllowed was not received"); }
 
         let library_id = uuid::Uuid::new_v4().to_string();
-        let host_info = plist::Value::Dictionary(
-            [
-                ("Type".into(), plist::Value::String("iTunes".into())),
-                ("Version".into(), plist::Value::String("13.7.0.161".into())),
-                ("MacOSVersion".into(), plist::Value::String("Windows NT 10.0".into())),
-                ("SyncHostName".into(), plist::Value::String("aircard".into())),
-                ("LibraryID".into(), plist::Value::String(library_id.clone())),
-                (
-                    "SyncedDataclasses".into(),
-                    plist::Value::Array(vec![plist::Value::String("Book".into())]),
-                ),
-                (
-                    "SyncedAssetTypes".into(),
-                    plist::Value::Array(vec![plist::Value::String("Book".into())]),
-                ),
-                ("Wakeable".into(), plist::Value::Boolean(false)),
-            ]
-            .into_iter()
-            .collect(),
-        );
+        let host_info = dict(vec![
+            ("Type", plist::Value::String("iTunes".into())),
+            ("Version", plist::Value::String("13.7.0.161".into())),
+            ("MacOSVersion", plist::Value::String("Windows NT 10.0".into())),
+            ("SyncHostName", plist::Value::String("aircard".into())),
+            ("LibraryID", plist::Value::String(library_id)),
+            ("SyncedDataclasses", plist::Value::Array(vec![plist::Value::String("Book".into())])),
+            ("SyncedAssetTypes", plist::Value::Array(vec![plist::Value::String("Book".into())])),
+            ("Wakeable", plist::Value::Boolean(false)),
+        ]);
 
-        let mut host_params = plist::Dictionary::new();
-        host_params.insert("HostInfo".into(), host_info.clone());
-        host_params.insert("LocalCloudSupport".into(), plist::Value::Boolean(true));
-        send_plist_frame(
-            &mut stream,
-            plist::Value::Dictionary(
-                [
-                    ("Command".into(), plist::Value::String("HostInfo".into())),
-                    ("Params".into(), plist::Value::Dictionary(host_params)),
-                    ("Session".into(), plist::Value::Integer(0.into())),
-                ]
-                .into_iter()
-                .collect(),
-            ),
-        )
-        .await?;
+        let host_params = dict(vec![
+            ("HostInfo", host_info.clone()),
+            ("LocalCloudSupport", plist::Value::Boolean(true)),
+        ]);
+        send_plist_frame(&mut stream, dict(vec![
+            ("Command", plist::Value::String("HostInfo".into())),
+            ("Params", host_params),
+            ("Session", plist::Value::Integer(0.into())),
+        ])).await?;
 
-        let params = plist::Value::Dictionary(
-            [
-                (
-                    "DataclassAnchors".into(),
-                    plist::Value::Dictionary(plist::Dictionary::new()),
-                ),
-                (
-                    "Dataclasses".into(),
-                    plist::Value::Array(vec![plist::Value::String("Book".into())]),
-                ),
-                ("HostInfo".into(), host_info),
-            ]
-            .into_iter()
-            .collect(),
-        );
-        send_plist_frame(
-            &mut stream,
-            plist::Value::Dictionary(
-                [
-                    ("Command".into(), plist::Value::String("RequestingSync".into())),
-                    ("Params".into(), params.as_dictionary().unwrap().clone().into()),
-                    ("Session".into(), plist::Value::Integer(1.into())),
-                ]
-                .into_iter()
-                .collect(),
-            ),
-        )
-        .await?;
+        let params = dict(vec![
+            ("DataclassAnchors", dict(vec![])),
+            ("Dataclasses", plist::Value::Array(vec![plist::Value::String("Book".into())])),
+            ("HostInfo", host_info),
+        ]);
+        send_plist_frame(&mut stream, dict(vec![
+            ("Command", plist::Value::String("RequestingSync".into())),
+            ("Params", params),
+            ("Session", plist::Value::Integer(1.into())),
+        ])).await?;
 
         log("Waiting for ReadyForSync...");
         let mut ready = false;
         for _ in 0..30 {
             let msg = read_plist_frame(&mut stream).await?;
             let name = message_name(&msg);
-            if name == "ReadyForSync" {
-                ready = true;
-                break;
-            }
-            if name == "SyncFailed" {
-                bail!("AirTraffic returned SyncFailed while preparing sync");
-            }
+            if name == "ReadyForSync" { ready = true; break; }
+            if name == "SyncFailed" { bail!("AirTraffic returned SyncFailed while preparing sync"); }
         }
-        if !ready {
-            bail!("AirTraffic: ReadyForSync was not received");
-        }
+        if !ready { bail!("AirTraffic: ReadyForSync was not received"); }
 
-        let sync_types = plist::Value::Dictionary(
-            [("Book".into(), plist::Value::Integer(1.into()))]
-                .into_iter()
-                .collect(),
-        );
-        send_plist_frame(
-            &mut stream,
-            plist::Value::Dictionary(
-                [
-                    ("Command".into(), plist::Value::String("MetadataSyncFinished".into())),
-                    ("Params".into(), plist::Value::Dictionary(
-                        [
-                            ("SyncTypes".into(), sync_types),
-                            (
-                                "DataclassAnchors".into(),
-                                plist::Value::Dictionary(plist::Dictionary::new()),
-                            ),
-                        ]
-                        .into_iter()
-                        .collect(),
-                    )),
-                    ("Session".into(), plist::Value::Integer(1.into())),
-                ]
-                .into_iter()
-                .collect(),
-            ),
-        )
-        .await?;
+        let sync_types = dict(vec![("Book", plist::Value::Integer(1.into()))]);
+        send_plist_frame(&mut stream, dict(vec![
+            ("Command", plist::Value::String("MetadataSyncFinished".into())),
+            ("Params", dict(vec![
+                ("SyncTypes", sync_types),
+                ("DataclassAnchors", dict(vec![])),
+            ])),
+            ("Session", plist::Value::Integer(1.into())),
+        ])).await?;
 
         log("Waiting for AssetManifest...");
         let manifest = loop {
             let msg = read_plist_frame(&mut stream).await?;
             let name = message_name(&msg);
             if name == "AssetManifest" {
-                let params = msg
-                    .as_dictionary()
-                    .and_then(|d| d.get("Params"))
-                    .and_then(|v| v.as_dictionary())
-                    .cloned()
-                    .unwrap_or_default();
-                break params.get("AssetManifest").cloned().or_else(|| params.get("Manifest").cloned());
+                let p = msg.as_dictionary().and_then(|d| d.get("Params")).and_then(|v| v.as_dictionary());
+                break p.and_then(|d| d.get("AssetManifest").or_else(|| d.get("Manifest"))).cloned();
             }
             if name == "SyncFailed" || name == "SyncFinished" {
                 bail!("AirTraffic terminated before AssetManifest: {name}");
@@ -823,37 +754,20 @@ where
             if !available.is_empty() && !available.iter().any(|x| x == ident) {
                 bail!("AirTraffic manifest does not advertise asset {ident}");
             }
-            send_plist_frame(
-                &mut stream,
-                plist::Value::Dictionary(
-                    [
-                        ("Command".into(), plist::Value::String("AssetCompleted".into())),
-                        (
-                            "Params".into(),
-                            plist::Value::Dictionary(
-                                [
-                                    ("AssetID".into(), plist::Value::String((*ident).into())),
-                                    ("Dataclass".into(), plist::Value::String("Book".into())),
-                                    ("Destination".into(), plist::Value::String((*dest).into())),
-                                ]
-                                .into_iter()
-                                .collect(),
-                            ),
-                        ),
-                        ("Session".into(), plist::Value::Integer(1.into())),
-                    ]
-                    .into_iter()
-                    .collect(),
-                ),
-            )
-            .await?;
+            send_plist_frame(&mut stream, dict(vec![
+                ("Command", plist::Value::String("AssetCompleted".into())),
+                ("Params", dict(vec![
+                    ("AssetID", plist::Value::String((*ident).into())),
+                    ("Dataclass", plist::Value::String("Book".into())),
+                    ("Destination", plist::Value::String((*dest).into())),
+                ])),
+                ("Session", plist::Value::Integer(1.into())),
+            ])).await?;
             tokio::time::sleep(Duration::from_millis(900)).await;
         }
-
         Ok::<(), anyhow::Error>(())
     })
 }
-
 
 pub fn wireless_write_file(path: &str, data: &[u8]) -> Result<()> {
     let path = path.to_string();
