@@ -108,13 +108,23 @@ fn load_pairing_file() -> Result<RpPairingFile> {
     if !path.is_file() {
         bail!("No saved iOS 27 wireless pairing exists yet. Tap 'Pair Wi-Fi' first.");
     }
-    let file = futures::executor::block_on(RpPairingFile::read_from_file(&path))
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to create pairing-file runtime")?;
+    let file = runtime
+        .block_on(RpPairingFile::read_from_file(&path))
         .context("Failed to read saved wireless pairing file")?;
     Ok(file)
 }
 
 fn save_pairing_file(file: &RpPairingFile) -> Result<()> {
-    futures::executor::block_on(file.write_to_file(pairing_path()))
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to create pairing-file runtime")?;
+    runtime
+        .block_on(file.write_to_file(pairing_path()))
         .context("Failed to save iOS 27 wireless pairing file")
 }
 
