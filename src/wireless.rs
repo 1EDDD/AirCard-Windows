@@ -699,6 +699,21 @@ where
                 .and_then(|v| v.as_unsigned_integer().or_else(|| v.as_signed_integer().and_then(|n| u64::try_from(n).ok())))
         };
 
+        fn plist_debug(value: &plist::Value) -> String {
+            let mut xml = Vec::new();
+            if value.to_writer_xml(&mut xml).is_ok() {
+                let text = String::from_utf8_lossy(&xml);
+                let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
+                if compact.len() > 6000 {
+                    format!("{}...", &compact[..6000])
+                } else {
+                    compact
+                }
+            } else {
+                format!("{value:?}")
+            }
+        }
+
         // Apple's ATHostConnection tracks the current ATC session. The
         // session number belongs to the received ATC messages and must be
         // echoed by subsequent HostInfo/sync messages rather than hardcoding
@@ -741,11 +756,13 @@ where
         let host_params = dict(vec![
             ("HostInfo", host_info.clone()),
         ]);
-        send_airtraffic_frame(&mut stream, dict(vec![
+        let host_message = dict(vec![
             ("Command", plist::Value::String("HostInfo".into())),
             ("Params", host_params),
             ("Session", plist::Value::Integer((atc_session as i64).into())),
-        ])).await?;
+        ]);
+        log(&format!("AirTraffic HostInfo TX: {}", plist_debug(&host_message)));
+        send_airtraffic_frame(&mut stream, host_message).await?;
 
         let params = dict(vec![
             ("DataclassAnchors", dict(vec![])),
@@ -757,11 +774,13 @@ where
         log("HostInfo sent. Waiting 200 ms before RequestingSync...");
         tokio::time::sleep(Duration::from_millis(200)).await;
 
-        send_airtraffic_frame(&mut stream, dict(vec![
+        let requesting_sync = dict(vec![
             ("Command", plist::Value::String("RequestingSync".into())),
             ("Params", params),
             ("Session", plist::Value::Integer((atc_session as i64).into())),
-        ])).await?;
+        ]);
+        log(&format!("AirTraffic RequestingSync TX: {}", plist_debug(&requesting_sync)));
+        send_airtraffic_frame(&mut stream, requesting_sync).await?;
 
         log("RequestingSync sent. Waiting for ReadyForSync...");
         let mut ready = false;
@@ -770,7 +789,10 @@ where
             let name = message_name(&msg);
             log(&format!("AirTraffic received: {}", if name.is_empty() { "<unnamed message>" } else { &name }));
             if name == "ReadyForSync" { ready = true; break; }
-            if name == "SyncFailed" { bail!("AirTraffic returned SyncFailed while preparing sync"); }
+            if name == "SyncFailed" {
+                log(&format!("AirTraffic SyncFailed details: {}", plist_debug(&msg)));
+                bail!("AirTraffic returned SyncFailed while preparing sync");
+            }
         }
         if !ready { bail!("AirTraffic: ReadyForSync was not received"); }
 
