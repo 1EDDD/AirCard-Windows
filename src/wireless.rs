@@ -181,7 +181,7 @@ impl Advertisement {
             .set_service_name_len_max(30)
             .context("failed to configure mDNS service name length")?;
 
-        let instance = format!("AirCard-{}", &identifier[..8.min(identifier.len())]);
+        let instance = identifier.clone();
         let host = format!("aircard-{}.local.", &identifier[..8.min(identifier.len())]);
         let service = ServiceInfo::new(
             PAIRABLE_HOST_SERVICE_TYPE,
@@ -248,13 +248,18 @@ where
             RpPairingSocket::new_device(stream),
             host_info,
         );
-        let peer = host
-            .accept(&mut pairing_file, |code| {
+        log("Remote Pairing handshake started. Waiting for the iPhone to finish pair-setup...".to_string());
+        let peer = timeout(
+            Duration::from_secs(120),
+            host.accept(&mut pairing_file, |code| {
                 pin(code);
                 async {}
-            })
-            .await
-            .context("iOS Remote Pairing handshake failed")?;
+            }),
+        )
+        .await
+        .context("Timed out after 120 seconds waiting for the iPhone to finish Remote Pairing")?
+        .context("iOS Remote Pairing handshake failed")?;
+        log("iPhone completed the Remote Pairing handshake.".to_string());
 
         save_pairing_file(&pairing_file)?;
         let info = WirelessDeviceInfo {
