@@ -720,8 +720,21 @@ where
             } else {
                 log(&format!("AirTraffic received: {}", if name.is_empty() { "<unnamed message>" } else { &name }));
             }
+            if name == "Capabilities" {
+                if let Some(params) = msg.as_dictionary().and_then(|d| d.get("Params")).and_then(|v| v.as_dictionary()) {
+                    if let Some(grappa) = params.get("GrappaSupportInfo") {
+                        log(&format!("iPhone GrappaSupportInfo: {}", format!("{grappa:?}")));
+                    }
+                }
+            }
             if name == "SyncAllowed" { sync_allowed = true; break; }
-            if name == "SyncFailed" { bail!("AirTraffic returned SyncFailed before sync started"); }
+            if name == "SyncFailed" {
+                let detail = msg.as_dictionary()
+                    .and_then(|d| d.get("Params"))
+                    .map(|v| format!("{v:?}"))
+                    .unwrap_or_else(|| "<no params>".into());
+                bail!("AirTraffic returned SyncFailed before sync started: {}", detail);
+            }
         }
         if !sync_allowed { bail!("AirTraffic: SyncAllowed was not received"); }
         log(&format!("Using AirTraffic session {} for HostInfo and sync.", atc_session));
@@ -775,7 +788,13 @@ where
             let name = message_name(&msg);
             log(&format!("AirTraffic received: {}", if name.is_empty() { "<unnamed message>" } else { &name }));
             if name == "ReadyForSync" { ready = true; break; }
-            if name == "SyncFailed" { bail!("AirTraffic returned SyncFailed while preparing sync"); }
+            if name == "SyncFailed" {
+                let detail = msg.as_dictionary()
+                    .and_then(|d| d.get("Params"))
+                    .map(|v| format!("{v:?}"))
+                    .unwrap_or_else(|| "<no params>".into());
+                bail!("AirTraffic returned SyncFailed while preparing sync: {}", detail);
+            }
         }
         if !ready { bail!("AirTraffic: ReadyForSync was not received"); }
 
@@ -825,7 +844,7 @@ where
                     ("Dataclass", plist::Value::String("Book".into())),
                     ("Destination", plist::Value::String((*dest).into())),
                 ])),
-                ("Session", plist::Value::Integer(1.into())),
+                ("Session", plist::Value::Integer((atc_session as i64).into())),
             ])).await?;
             tokio::time::sleep(Duration::from_millis(900)).await;
         }
