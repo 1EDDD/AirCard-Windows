@@ -406,12 +406,13 @@ impl AppleLibraries {
 
     /// Generate Apple's CIG blob for a binary plist using a native Grappa session.
     pub fn get_hash_cig(&self, session_id: u32, plist_bytes: &[u8]) -> Result<Vec<u8>> {
+        let get_hash_cig = self.get_hash_cig.context("iTunes.dll/GetHashCig is not installed; Apple Mobile Device Support alone cannot generate the native Grappa CIG")?;
         let mut input = plist_bytes.to_vec();
         input.push(0);
         let mut out_ptr: *mut u8 = ptr::null_mut();
         let mut out_len: i32 = 0;
         let rc = unsafe {
-            (self.get_hash_cig)(
+            (get_hash_cig)(
                 session_id,
                 input.as_ptr() as *const std::ffi::c_char,
                 i32::try_from(plist_bytes.len()).context("plist is too large for GetHashCig")?,
