@@ -130,6 +130,7 @@ pub struct AppleLibraries {
     pub at_host_connection_create_with_library: unsafe extern "C" fn(CFStringRef, CFStringRef, *mut std::ffi::c_void) -> ATHostConnectionRef,
     pub at_host_connection_get_grappa_session_id: unsafe extern "C" fn(ATHostConnectionRef) -> u32,
     pub at_host_connection_get_current_session_number: unsafe extern "C" fn(ATHostConnectionRef) -> u32,
+    pub get_hash_cig: unsafe extern "C" fn(u32, *const std::ffi::c_char, i32, *mut *mut u8, *mut i32) -> i32,
     pub at_host_connection_release: unsafe extern "C" fn(ATHostConnectionRef),
     pub at_host_connection_send_host_info: unsafe extern "C" fn(ATHostConnectionRef, CFDictionaryRef),
     pub at_host_connection_send_sync_request: unsafe extern "C" fn(ATHostConnectionRef, CFArrayRef, CFDictionaryRef, CFDictionaryRef),
@@ -171,7 +172,11 @@ pub fn get_apple_libraries() -> Result<Arc<AppleLibraries>> {
     let cf_path = dir.join("CoreFoundation.dll");
     let md_path = dir.join("MobileDevice.dll");
     let ath_path = dir.join("AirTrafficHost.dll");
-    let itunes_path = dir.join("..").join("iTunes").join("iTunes.dll");
+    let itunes_path = [
+        dir.join("..").join("..").join("iTunes").join("iTunes.dll"),
+        PathBuf::from(r"C:\Program Files\iTunes\iTunes.dll"),
+        PathBuf::from(r"C:\Program Files (x86)\iTunes\iTunes.dll"),
+    ].into_iter().find(|p| p.is_file()).context("iTunes.dll was not found; install the Apple iTunes desktop package")?;
 
     unsafe {
         let cf_lib = Library::new(&cf_path).context("Failed to load CoreFoundation.dll")?;
@@ -247,6 +252,7 @@ pub fn get_apple_libraries() -> Result<Arc<AppleLibraries>> {
         let at_host_connection_create_with_library = load_sym!(ath_lib, "ATHostConnectionCreateWithLibrary");
         let at_host_connection_get_grappa_session_id = load_sym!(ath_lib, "ATHostConnectionGetGrappaSessionId");
         let at_host_connection_get_current_session_number = load_sym!(ath_lib, "ATHostConnectionGetCurrentSessionNumber");
+        let get_hash_cig = load_sym!(itunes_lib, "GetHashCig");
         let at_host_connection_release = load_sym!(ath_lib, "ATHostConnectionRelease");
         let at_host_connection_send_host_info = load_sym!(ath_lib, "ATHostConnectionSendHostInfo");
         let at_host_connection_send_sync_request = load_sym!(ath_lib, "ATHostConnectionSendSyncRequest");
@@ -321,6 +327,7 @@ pub fn get_apple_libraries() -> Result<Arc<AppleLibraries>> {
             at_host_connection_create_with_library,
             at_host_connection_get_grappa_session_id,
             at_host_connection_get_current_session_number,
+            get_hash_cig,
             at_host_connection_release,
             at_host_connection_send_host_info,
             at_host_connection_send_sync_request,
