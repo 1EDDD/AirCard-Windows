@@ -130,7 +130,7 @@ pub struct AppleLibraries {
     pub at_host_connection_create_with_library: unsafe extern "C" fn(CFStringRef, CFStringRef, *mut std::ffi::c_void) -> ATHostConnectionRef,
     pub at_host_connection_get_grappa_session_id: unsafe extern "C" fn(ATHostConnectionRef) -> u32,
     pub at_host_connection_get_current_session_number: unsafe extern "C" fn(ATHostConnectionRef) -> u32,
-    pub get_hash_cig: unsafe extern "C" fn(u32, *const std::ffi::c_char, i32, *mut *mut u8, *mut i32) -> i32,
+    pub get_hash_cig: Option<unsafe extern "C" fn(u32, *const std::ffi::c_char, i32, *mut *mut u8, *mut i32) -> i32>,
     pub at_host_connection_release: unsafe extern "C" fn(ATHostConnectionRef),
     pub at_host_connection_destroy: unsafe extern "C" fn(ATHostConnectionRef) -> i32,
     pub at_host_connection_send_host_info: unsafe extern "C" fn(ATHostConnectionRef, CFDictionaryRef),
@@ -455,7 +455,7 @@ impl AppleLibraries {
 
     /// Generate Apple's CIG blob for a binary plist using a native Grappa session.
     pub fn get_hash_cig(&self, session_id: u32, plist_bytes: &[u8]) -> Result<Vec<u8>> {
-        let get_hash_cig = self.get_hash_cig.context("iTunes.dll/GetHashCig is not installed; Apple Mobile Device Support alone cannot generate the native Grappa CIG")?;
+        let get_hash_cig = self.get_hash_cig.ok_or_else(|| anyhow::anyhow!("iTunes.dll/GetHashCig is not installed; Apple Mobile Device Support alone cannot generate the native Grappa CIG"))?;
         let mut input = plist_bytes.to_vec();
         input.push(0);
         let mut out_ptr: *mut u8 = ptr::null_mut();
