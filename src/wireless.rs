@@ -745,6 +745,37 @@ where
         // derives it from the host-side Grappa session machinery.
         // Keep this probe explicit so the next runtime log identifies the
         // exact failure returned by ATGrappaEstablishSession.
+        let host_info_without_grappa = dict(vec![
+            ("Type", plist::Value::String("iTunes".into())),
+            ("Version", plist::Value::String("13.7.0.161".into())),
+            ("MacOSVersion", plist::Value::String("Windows NT 10.0".into())),
+            ("SyncHostName", plist::Value::String("aircard".into())),
+            ("LibraryID", plist::Value::String(library_id.clone())),
+            ("SyncedDataclasses", plist::Value::Array(vec![plist::Value::String("Book".into())])),
+            ("SyncedAssetTypes", plist::Value::Array(vec![plist::Value::String("Book".into())])),
+            ("Wakeable", plist::Value::Boolean(false)),
+        ]);
+
+        // iOS 27's ATLegacyDeviceSyncManager establishes a Grappa session from
+        // HostInfo["Grappa"]. Windows iTunes exposes the matching primitives
+        // through AirTrafficHost.dll + iTunes.dll, so use the native Grappa
+        // session/CIG generator instead of inventing the authorization blob.
+        let device_info = load_saved_device_info()
+            .context("No saved wireless device metadata is available for Grappa")?;
+        let apple = crate::apple::get_apple_libraries()
+            .context("Apple Mobile Device Support/iTunes is required for the native Grappa handshake")?;
+        let grappa_session = apple
+            .native_grappa_session_id(&device_info.udid, &library_id)
+            .context("Failed to create the native Apple Grappa session")?;
+        log(&format!("Native Apple Grappa session id: {}", grappa_session));
+
+        let mut grappa_input = Vec::new();
+        host_info_without_grappa.to_writer_binary(&mut grappa_input)?;
+        let grappa_cig = apple
+            .get_hash_cig(grappa_session, &grappa_input)
+            .context("Native Apple GetHashCig failed")?;
+        log(&format!("Native Apple Grappa CIG generated: {} bytes", grappa_cig.len()));
+
         let host_info = dict(vec![
             ("Type", plist::Value::String("iTunes".into())),
             ("Version", plist::Value::String("13.7.0.161".into())),
@@ -754,6 +785,7 @@ where
             ("SyncedDataclasses", plist::Value::Array(vec![plist::Value::String("Book".into())])),
             ("SyncedAssetTypes", plist::Value::Array(vec![plist::Value::String("Book".into())])),
             ("Wakeable", plist::Value::Boolean(false)),
+            ("Grappa", plist::Value::Data(grappa_cig)),
         ]);
 
         let host_params = dict(vec![
