@@ -160,6 +160,8 @@ fn discover_itunes_dll() -> Option<PathBuf> {
     let mut candidates = vec![
         PathBuf::from(r"C:\Program Files\iTunes\iTunes.dll"),
         PathBuf::from(r"C:\Program Files (x86)\iTunes\iTunes.dll"),
+        PathBuf::from(r"C:\Program Files\Common Files\Apple\iTunes\iTunes.dll"),
+        PathBuf::from(r"C:\Program Files (x86)\Common Files\Apple\iTunes\iTunes.dll"),
     ];
 
     for key in [
@@ -182,6 +184,21 @@ fn discover_itunes_dll() -> Option<PathBuf> {
                                 candidates.push(p);
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(program_files) = std::env::var_os("ProgramFiles") {
+        let root = PathBuf::from(program_files);
+        if let Ok(entries) = std::fs::read_dir(root.join("WindowsApps")) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+                if name.starts_with("appleinc.itunes_") {
+                    let p = entry.path().join("iTunes.dll");
+                    if p.is_file() {
+                        candidates.push(p);
                     }
                 }
             }
