@@ -128,7 +128,7 @@ pub struct AppleLibraries {
 
     // AirTrafficHost functions
     pub at_host_connection_create: unsafe extern "C" fn(CFStringRef) -> ATHostConnectionRef,
-    pub at_host_connection_create_with_library: unsafe extern "C" fn(CFStringRef, CFStringRef, *mut u32) -> ATHostConnectionRef,
+    pub at_host_connection_create_with_library: unsafe extern "C" fn(CFStringRef, CFStringRef, CFStringRef) -> ATHostConnectionRef,
     pub at_host_connection_get_grappa_session_id: unsafe extern "C" fn(ATHostConnectionRef) -> i32,
     pub at_host_connection_get_current_session_number: unsafe extern "C" fn(ATHostConnectionRef) -> i32,
     pub at_host_connection_send_power_assertion: unsafe extern "C" fn(ATHostConnectionRef, CFTypeRef) -> i32,
@@ -450,13 +450,12 @@ impl AppleLibraries {
     pub fn native_grappa_session_id(&self, guid: &str, library_id: &str) -> Result<u32> {
         let guid = self.create_cf_string(guid)?;
         let library_id = self.create_cf_string(library_id)?;
-        // The native ABI is: (libraryId, deviceUDID, uint32_t *unknown) -> ATHostConnectionRef.
-        // The third argument is a pointer, not an integer value. Passing 0 as an i32 here
-        // corrupts the call frame on 64-bit Windows and is the direct cause of the crash
-        // observed immediately after "Using AirTraffic session ...".
-        let mut unknown: u32 = 0;
+        // Apple exposes this as:
+        // (libraryId, deviceUDID, iTunesExecutableCFStringOrNull) -> ATHostConnectionRef.
+        // The return value is a pointer-sized ATHostConnectionRef, not an i32.
+        // Also note the argument order: library first, UDID second.
         let connection = unsafe {
-            (self.at_host_connection_create_with_library)(library_id.raw, guid.raw, &mut unknown)
+            (self.at_host_connection_create_with_library)(library_id.raw, guid.raw, ptr::null())
         };
         if connection.is_null() {
             bail!("ATHostConnectionCreateWithLibrary returned null while creating Grappa session");
