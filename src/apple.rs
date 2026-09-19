@@ -68,6 +68,7 @@ pub struct AppleLibraries {
     pub cf_release: unsafe extern "C" fn(CFTypeRef),
     pub cf_retain: unsafe extern "C" fn(CFTypeRef) -> CFTypeRef,
     pub cf_equal: unsafe extern "C" fn(CFTypeRef, CFTypeRef) -> u32,
+    pub cf_boolean_true: CFTypeRef,
     pub cf_run_loop_get_main: unsafe extern "C" fn() -> *const std::ffi::c_void,
     pub cf_run_loop_run_in_mode: unsafe extern "C" fn(CFStringRef, f64, u8) -> i32,
     pub cf_run_loop_stop: unsafe extern "C" fn(*const std::ffi::c_void),
@@ -130,6 +131,7 @@ pub struct AppleLibraries {
     pub at_host_connection_create_with_library: unsafe extern "C" fn(CFStringRef, CFStringRef, *mut std::ffi::c_void) -> ATHostConnectionRef,
     pub at_host_connection_get_grappa_session_id: unsafe extern "C" fn(ATHostConnectionRef) -> u32,
     pub at_host_connection_get_current_session_number: unsafe extern "C" fn(ATHostConnectionRef) -> u32,
+    pub at_host_connection_send_power_assertion: unsafe extern "C" fn(ATHostConnectionRef, CFTypeRef) -> i32,
     pub get_hash_cig: Option<unsafe extern "C" fn(u32, *const std::ffi::c_char, i32, *mut *mut u8, *mut i32) -> i32>,
     pub at_host_connection_release: unsafe extern "C" fn(ATHostConnectionRef),
     pub at_host_connection_destroy: unsafe extern "C" fn(ATHostConnectionRef) -> i32,
@@ -258,6 +260,12 @@ pub fn get_apple_libraries() -> Result<Arc<AppleLibraries>> {
         let cf_release = load_sym!(cf_lib, "CFRelease");
         let cf_retain = load_sym!(cf_lib, "CFRetain");
         let cf_equal = load_sym!(cf_lib, "CFEqual");
+        let cf_boolean_true: CFTypeRef = {
+            let symbol: Symbol<CFTypeRef> = cf_lib
+                .get(b"kCFBooleanTrue")
+                .context("Missing symbol: kCFBooleanTrue")?;
+            *symbol
+        };
         let cf_run_loop_get_main = load_sym!(cf_lib, "CFRunLoopGetMain");
         let cf_run_loop_run_in_mode = load_sym!(cf_lib, "CFRunLoopRunInMode");
         let cf_run_loop_stop = load_sym!(cf_lib, "CFRunLoopStop");
@@ -305,6 +313,7 @@ pub fn get_apple_libraries() -> Result<Arc<AppleLibraries>> {
         let at_host_connection_create_with_library = load_sym!(ath_lib, "ATHostConnectionCreateWithLibrary");
         let at_host_connection_get_grappa_session_id = load_sym!(ath_lib, "ATHostConnectionGetGrappaSessionId");
         let at_host_connection_get_current_session_number = load_sym!(ath_lib, "ATHostConnectionGetCurrentSessionNumber");
+        let at_host_connection_send_power_assertion = load_sym!(ath_lib, "ATHostConnectionSendPowerAssertion");
         let get_hash_cig = itunes_lib.as_ref().map(|lib| {
             let symbol: Symbol<unsafe extern "C" fn(u32, *const std::ffi::c_char, i32, *mut *mut u8, *mut i32) -> i32> =
                 lib.get(b"GetHashCig").expect("GetHashCig symbol missing from iTunes.dll");
@@ -338,6 +347,7 @@ pub fn get_apple_libraries() -> Result<Arc<AppleLibraries>> {
             cf_release,
             cf_retain,
             cf_equal,
+            cf_boolean_true,
             cf_run_loop_get_main,
             cf_run_loop_run_in_mode,
             cf_run_loop_stop,
@@ -385,6 +395,7 @@ pub fn get_apple_libraries() -> Result<Arc<AppleLibraries>> {
             at_host_connection_create_with_library,
             at_host_connection_get_grappa_session_id,
             at_host_connection_get_current_session_number,
+            at_host_connection_send_power_assertion,
             get_hash_cig,
             at_host_connection_release,
             at_host_connection_destroy,
@@ -445,7 +456,20 @@ impl AppleLibraries {
         if connection.is_null() {
             bail!("ATHostConnectionCreateWithLibrary returned null while creating Grappa session");
         }
+        // Apple's Windows iTunes stack lazily creates the Grappa context when
+        // the host takes the ATC power assertion. Calling GetGrappaSessionId
+        // immediately after CreateWithLibrary therefore returns 0 on some
+        // iTunes/AMDS builds. This is the same native step used by iTunes
+        // before generating the Grappa CIG for RequestingSync.
+        let power_rc = unsafe {
+            (self.at_host_connection_send_power_assertion)(connection, self.cf_boolean_true)
+        };
+        if power_rc != 0 {
+            unsafe { (self.at_host_connection_destroy)(connection); }
+            bail!("ATHostConnectionSendPowerAssertion failed with error code {power_rc}");
+        }
         let session_id = unsafe { (self.at_host_connection_get_grappa_session_id)(connection) };
+        let current_session = unsafe { (self.at_host_connection_get_current_session_number)(connection) };
         unsafe { (self.at_host_connection_destroy)(connection); }
         if session_id == 0 {
             bail!("Apple AirTrafficHost returned Grappa session id 0");
