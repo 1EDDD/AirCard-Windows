@@ -791,7 +791,7 @@ where
             if name == "SyncFailed" {
                 let detail = msg.as_dictionary()
                     .and_then(|d| d.get("Params"))
-                    .map(|v| v.to_xml().unwrap_or_else(|_| "<unserializable>".into()))
+                    .map(|v| format!("{v:?}"))
                     .unwrap_or_else(|| "<no params>".into());
                 bail!("AirTraffic returned SyncFailed while preparing sync: {}", detail);
             }
