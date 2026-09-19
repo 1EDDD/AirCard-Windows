@@ -741,7 +741,6 @@ where
             ("SyncedDataclasses", plist::Value::Array(vec![plist::Value::String("Book".into())])),
             ("SyncedAssetTypes", plist::Value::Array(vec![plist::Value::String("Book".into())])),
             ("Wakeable", plist::Value::Boolean(false)),
-            ("Grappa", plist::Value::Data(Vec::new())),
         ]);
 
         let host_params = dict(vec![
