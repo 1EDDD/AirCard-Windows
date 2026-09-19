@@ -453,7 +453,7 @@ impl AppleLibraries {
         // Apple exposes this as:
         // (libraryId, deviceUDID, iTunesExecutableCFStringOrNull) -> ATHostConnectionRef.
         // The return value is a pointer-sized ATHostConnectionRef, not an i32.
-        // Also note the argument order: library first, UDID second.
+        // The native implementations used by Windows iTunes pass the third argument as null.
         let connection = unsafe {
             (self.at_host_connection_create_with_library)(library_id.raw, guid.raw, ptr::null())
         };
