@@ -469,7 +469,6 @@ impl AppleLibraries {
             bail!("ATHostConnectionSendPowerAssertion failed with error code {power_rc}");
         }
         let session_id = unsafe { (self.at_host_connection_get_grappa_session_id)(connection) };
-        let current_session = unsafe { (self.at_host_connection_get_current_session_number)(connection) };
         unsafe { (self.at_host_connection_destroy)(connection); }
         if session_id == 0 {
             bail!("Apple AirTrafficHost returned Grappa session id 0");
