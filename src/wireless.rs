@@ -783,7 +783,7 @@ where
 
         let host_info = dict(vec![
             ("Type", plist::Value::String("iTunes".into())),
-            ("Version", plist::Value::String("13.7.0.161".into())),
+            ("Version", plist::Value::String(itunes_version.clone())),
             ("MacOSVersion", plist::Value::String("Windows NT 10.0".into())),
             ("SyncHostName", plist::Value::String("aircard".into())),
             ("LibraryID", plist::Value::String(library_id)),
