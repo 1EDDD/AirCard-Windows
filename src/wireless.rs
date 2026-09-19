@@ -727,6 +727,11 @@ where
         log(&format!("Using AirTraffic session {} for HostInfo and sync.", atc_session));
 
         let library_id = uuid::Uuid::new_v4().to_string();
+        // iOS requires a host-generated Grappa blob for legacy sync. We do not
+        // fabricate one from the device's GrappaSupportInfo because Apple
+        // derives it from the host-side Grappa session machinery.
+        // Keep this probe explicit so the next runtime log identifies the
+        // exact failure returned by ATGrappaEstablishSession.
         let host_info = dict(vec![
             ("Type", plist::Value::String("iTunes".into())),
             ("Version", plist::Value::String("13.7.0.161".into())),
@@ -736,6 +741,7 @@ where
             ("SyncedDataclasses", plist::Value::Array(vec![plist::Value::String("Book".into())])),
             ("SyncedAssetTypes", plist::Value::Array(vec![plist::Value::String("Book".into())])),
             ("Wakeable", plist::Value::Boolean(false)),
+            ("Grappa", plist::Value::Data(Vec::new())),
         ]);
 
         let host_params = dict(vec![
