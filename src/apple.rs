@@ -374,6 +374,50 @@ impl Drop for CFTypeGuard {
 }
 
 impl AppleLibraries {
+    /// Ask Apple's Windows AirTrafficHost/iTunes stack for a Grappa session id.
+    /// This is intentionally isolated from the wireless transport: the native
+    /// API owns the Grappa session state while RSD carries the actual ATC data.
+    pub fn native_grappa_session_id(&self, guid: &str, library_id: &str) -> Result<u32> {
+        let guid = self.create_cf_string(guid)?;
+        let library_id = self.create_cf_string(library_id)?;
+        let connection = unsafe {
+            (self.at_host_connection_create_with_library)(guid.raw, library_id.raw, ptr::null_mut())
+        };
+        if connection.is_null() {
+            bail!("ATHostConnectionCreateWithLibrary returned null while creating Grappa session");
+        }
+        let session_id = unsafe { (self.at_host_connection_get_grappa_session_id)(connection) };
+        unsafe { (self.at_host_connection_destroy)(connection); }
+        if session_id == 0 {
+            bail!("Apple AirTrafficHost returned Grappa session id 0");
+        }
+        Ok(session_id)
+    }
+
+    /// Generate Apple's CIG blob for a binary plist using a native Grappa session.
+    pub fn get_hash_cig(&self, session_id: u32, plist_bytes: &[u8]) -> Result<Vec<u8>> {
+        let input = CString::new(plist_bytes).context("plist bytes contain an embedded NUL")?;
+        let mut out_ptr: *mut u8 = ptr::null_mut();
+        let mut out_len: i32 = 0;
+        let rc = unsafe {
+            (self.get_hash_cig)(
+                session_id,
+                input.as_ptr(),
+                i32::try_from(plist_bytes.len()).context("plist is too large for GetHashCig")?,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        if rc != 0 {
+            bail!("GetHashCig failed with error code {rc}");
+        }
+        if out_ptr.is_null() || out_len <= 0 {
+            bail!("GetHashCig returned an empty CIG blob");
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(out_ptr, out_len as usize).to_vec() };
+        Ok(bytes)
+    }
+
     pub fn create_cf_string(&self, s: &str) -> Result<CFStringGuard> {
         let c_str = CString::new(s).context("String contains null byte")?;
         let raw = unsafe {
