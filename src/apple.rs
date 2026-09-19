@@ -53,7 +53,7 @@ pub struct AppleLibraries {
     _cf_lib: Library,
     _md_lib: Library,
     _ath_lib: Library,
-    _itunes_lib: Library,
+    _itunes_lib: Option<Library>,
 
     // CoreFoundation functions
     pub cf_string_create: unsafe extern "C" fn(CFAllocatorRef, *const std::ffi::c_char, CFStringEncoding) -> CFStringRef,
@@ -177,13 +177,16 @@ pub fn get_apple_libraries() -> Result<Arc<AppleLibraries>> {
         dir.join("..").join("..").join("iTunes").join("iTunes.dll"),
         PathBuf::from(r"C:\Program Files\iTunes\iTunes.dll"),
         PathBuf::from(r"C:\Program Files (x86)\iTunes\iTunes.dll"),
-    ].into_iter().find(|p| p.is_file()).context("iTunes.dll was not found; install the Apple iTunes desktop package")?;
+    ].into_iter().find(|p| p.is_file());
 
     unsafe {
         let cf_lib = Library::new(&cf_path).context("Failed to load CoreFoundation.dll")?;
         let md_lib = Library::new(&md_path).context("Failed to load MobileDevice.dll")?;
         let ath_lib = Library::new(&ath_path).context("Failed to load AirTrafficHost.dll")?;
-        let itunes_lib = Library::new(&itunes_path).context("Failed to load iTunes.dll")?;
+        let itunes_lib = match itunes_path {
+            Some(path) => Some(Library::new(&path).context("Failed to load iTunes.dll")?),
+            None => None,
+        };
 
         macro_rules! load_sym {
             ($lib:expr, $name:expr) => {{
@@ -253,7 +256,11 @@ pub fn get_apple_libraries() -> Result<Arc<AppleLibraries>> {
         let at_host_connection_create_with_library = load_sym!(ath_lib, "ATHostConnectionCreateWithLibrary");
         let at_host_connection_get_grappa_session_id = load_sym!(ath_lib, "ATHostConnectionGetGrappaSessionId");
         let at_host_connection_get_current_session_number = load_sym!(ath_lib, "ATHostConnectionGetCurrentSessionNumber");
-        let get_hash_cig = load_sym!(itunes_lib, "GetHashCig");
+        let get_hash_cig = itunes_lib.as_ref().map(|lib| {
+            let symbol: Symbol<unsafe extern "C" fn(u32, *const std::ffi::c_char, i32, *mut *mut u8, *mut i32) -> i32> =
+                lib.get(b"GetHashCig").expect("GetHashCig symbol missing from iTunes.dll");
+            *symbol
+        });
         let at_host_connection_release = load_sym!(ath_lib, "ATHostConnectionRelease");
         let at_host_connection_destroy = load_sym!(ath_lib, "ATHostConnectionDestroy");
         let at_host_connection_send_host_info = load_sym!(ath_lib, "ATHostConnectionSendHostInfo");
