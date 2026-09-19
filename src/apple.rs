@@ -210,6 +210,34 @@ fn discover_itunes_dll() -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.is_file())
 }
 
+pub fn discover_itunes_version() -> Option<String> {
+    for key in [
+        r"HKLM\SOFTWARE\Apple Computer, Inc.\iTunes",
+        r"HKLM\SOFTWARE\WOW6432Node\Apple Computer, Inc.\iTunes",
+        r"HKLM\SOFTWARE\Apple Inc.\iTunes",
+        r"HKLM\SOFTWARE\WOW6432Node\Apple Inc.\iTunes",
+    ] {
+        if let Ok(output) = std::process::Command::new("reg")
+            .args(["query", key, "/v", "Version"])
+            .output()
+        {
+            if output.status.success() {
+                let text = String::from_utf8_lossy(&output.stdout);
+                for line in text.lines() {
+                    if line.contains("Version") {
+                        if let Some(value) = line.split_whitespace().last() {
+                            if value.chars().any(|c| c.is_ascii_digit()) && value.contains('.') {
+                                return Some(value.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 pub fn get_apple_libraries() -> Result<Arc<AppleLibraries>> {
     if let Some(libs) = LIBRARIES.get() {
         return Ok(Arc::clone(libs));
