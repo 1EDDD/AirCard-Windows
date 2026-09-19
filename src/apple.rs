@@ -155,6 +155,42 @@ pub fn locate_support_dir() -> Option<PathBuf> {
         })
 }
 
+
+fn discover_itunes_dll() -> Option<PathBuf> {
+    let mut candidates = vec![
+        PathBuf::from(r"C:\Program Files\iTunes\iTunes.dll"),
+        PathBuf::from(r"C:\Program Files (x86)\iTunes\iTunes.dll"),
+    ];
+
+    for key in [
+        r"HKLM\SOFTWARE\Apple Computer, Inc.\iTunes",
+        r"HKLM\SOFTWARE\WOW6432Node\Apple Computer, Inc.\iTunes",
+        r"HKLM\SOFTWARE\Apple Inc.\iTunes",
+        r"HKLM\SOFTWARE\WOW6432Node\Apple Inc.\iTunes",
+    ] {
+        if let Ok(output) = std::process::Command::new("reg")
+            .args(["query", key, "/v", "InstallDir"])
+            .output()
+        {
+            if output.status.success() {
+                let text = String::from_utf8_lossy(&output.stdout);
+                for line in text.lines() {
+                    if line.contains("InstallDir") {
+                        if let Some(path) = line.split_whitespace().last() {
+                            let p = PathBuf::from(path).join("iTunes.dll");
+                            if p.is_file() {
+                                candidates.push(p);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    candidates.into_iter().find(|p| p.is_file())
+}
+
 pub fn get_apple_libraries() -> Result<Arc<AppleLibraries>> {
     if let Some(libs) = LIBRARIES.get() {
         return Ok(Arc::clone(libs));
@@ -173,11 +209,7 @@ pub fn get_apple_libraries() -> Result<Arc<AppleLibraries>> {
     let cf_path = dir.join("CoreFoundation.dll");
     let md_path = dir.join("MobileDevice.dll");
     let ath_path = dir.join("AirTrafficHost.dll");
-    let itunes_path = [
-        dir.join("..").join("..").join("iTunes").join("iTunes.dll"),
-        PathBuf::from(r"C:\Program Files\iTunes\iTunes.dll"),
-        PathBuf::from(r"C:\Program Files (x86)\iTunes\iTunes.dll"),
-    ].into_iter().find(|p| p.is_file());
+    let itunes_path = discover_itunes_dll();
 
     unsafe {
         let cf_lib = Library::new(&cf_path).context("Failed to load CoreFoundation.dll")?;
