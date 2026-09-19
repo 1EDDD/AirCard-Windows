@@ -128,13 +128,13 @@ pub struct AppleLibraries {
 
     // AirTrafficHost functions
     pub at_host_connection_create: unsafe extern "C" fn(CFStringRef) -> ATHostConnectionRef,
-    pub at_host_connection_create_with_library: unsafe extern "C" fn(CFStringRef, CFStringRef, i32) -> i32,
-    pub at_host_connection_get_grappa_session_id: unsafe extern "C" fn(i32) -> u32,
-    pub at_host_connection_get_current_session_number: unsafe extern "C" fn(i32) -> u32,
-    pub at_host_connection_send_power_assertion: unsafe extern "C" fn(i32, CFTypeRef) -> i32,
+    pub at_host_connection_create_with_library: unsafe extern "C" fn(CFStringRef, CFStringRef, *mut u32) -> ATHostConnectionRef,
+    pub at_host_connection_get_grappa_session_id: unsafe extern "C" fn(ATHostConnectionRef) -> i32,
+    pub at_host_connection_get_current_session_number: unsafe extern "C" fn(ATHostConnectionRef) -> i32,
+    pub at_host_connection_send_power_assertion: unsafe extern "C" fn(ATHostConnectionRef, CFTypeRef) -> i32,
     pub get_hash_cig: Option<unsafe extern "C" fn(u32, *const std::ffi::c_char, i32, *mut *mut u8, *mut i32) -> i32>,
     pub at_host_connection_release: unsafe extern "C" fn(ATHostConnectionRef),
-    pub at_host_connection_destroy: unsafe extern "C" fn(i32) -> i32,
+    pub at_host_connection_destroy: unsafe extern "C" fn(ATHostConnectionRef),
     pub at_host_connection_send_host_info: unsafe extern "C" fn(ATHostConnectionRef, CFDictionaryRef),
     pub at_host_connection_send_sync_request: unsafe extern "C" fn(ATHostConnectionRef, CFArrayRef, CFDictionaryRef, CFDictionaryRef),
     pub at_host_connection_send_metadata_sync_finished: unsafe extern "C" fn(ATHostConnectionRef, CFDictionaryRef, CFDictionaryRef),
@@ -450,11 +450,16 @@ impl AppleLibraries {
     pub fn native_grappa_session_id(&self, guid: &str, library_id: &str) -> Result<u32> {
         let guid = self.create_cf_string(guid)?;
         let library_id = self.create_cf_string(library_id)?;
+        // The native ABI is: (libraryId, deviceUDID, uint32_t *unknown) -> ATHostConnectionRef.
+        // The third argument is a pointer, not an integer value. Passing 0 as an i32 here
+        // corrupts the call frame on 64-bit Windows and is the direct cause of the crash
+        // observed immediately after "Using AirTraffic session ...".
+        let mut unknown: u32 = 0;
         let connection = unsafe {
-            (self.at_host_connection_create_with_library)(guid.raw, library_id.raw, 0)
+            (self.at_host_connection_create_with_library)(library_id.raw, guid.raw, &mut unknown)
         };
-        if connection == 0 {
-            bail!("ATHostConnectionCreateWithLibrary returned handle 0 while creating Grappa session");
+        if connection.is_null() {
+            bail!("ATHostConnectionCreateWithLibrary returned null while creating Grappa session");
         }
         // Apple's Windows iTunes stack lazily creates the Grappa context when
         // the host takes the ATC power assertion. Calling GetGrappaSessionId
@@ -470,10 +475,10 @@ impl AppleLibraries {
         }
         let session_id = unsafe { (self.at_host_connection_get_grappa_session_id)(connection) };
         unsafe { (self.at_host_connection_destroy)(connection); }
-        if session_id == 0 {
-            bail!("Apple AirTrafficHost returned Grappa session id 0");
+        if session_id <= 0 {
+            bail!("Apple AirTrafficHost returned invalid Grappa session id {session_id}");
         }
-        Ok(session_id)
+        Ok(session_id as u32)
     }
 
     /// Generate Apple's CIG blob for a binary plist using a native Grappa session.
