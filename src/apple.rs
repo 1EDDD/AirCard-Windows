@@ -128,7 +128,7 @@ pub struct AppleLibraries {
 
     // AirTrafficHost functions
     pub at_host_connection_create: unsafe extern "C" fn(CFStringRef) -> ATHostConnectionRef,
-    pub at_host_connection_create_with_library: unsafe extern "C" fn(CFStringRef, CFStringRef, CFStringRef) -> ATHostConnectionRef,
+    pub at_host_connection_create_with_library: unsafe extern "C" fn(CFStringRef, CFStringRef, i32) -> ATHostConnectionRef,
     pub at_host_connection_get_grappa_session_id: unsafe extern "C" fn(ATHostConnectionRef) -> i32,
     pub at_host_connection_get_current_session_number: unsafe extern "C" fn(ATHostConnectionRef) -> i32,
     pub at_host_connection_send_power_assertion: unsafe extern "C" fn(ATHostConnectionRef, CFTypeRef) -> i32,
@@ -450,12 +450,11 @@ impl AppleLibraries {
     pub fn native_grappa_session_id(&self, guid: &str, library_id: &str) -> Result<u32> {
         let guid = self.create_cf_string(guid)?;
         let library_id = self.create_cf_string(library_id)?;
-        // Apple exposes this as:
-        // (libraryId, deviceUDID, iTunesExecutableCFStringOrNull) -> ATHostConnectionRef.
-        // The return value is a pointer-sized ATHostConnectionRef, not an i32.
-        // The native implementations used by Windows iTunes pass the third argument as null.
+        // Windows iTunes bindings expose this as:
+        // (library/version CFString, device UDID CFString, int unknown) -> ATHostConnectionRef.
+        // The return value is pointer-sized. Only the third scalar is an i32.
         let connection = unsafe {
-            (self.at_host_connection_create_with_library)(library_id.raw, guid.raw, ptr::null())
+            (self.at_host_connection_create_with_library)(library_id.raw, guid.raw, 0)
         };
         if connection.is_null() {
             bail!("ATHostConnectionCreateWithLibrary returned null while creating Grappa session");
