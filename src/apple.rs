@@ -132,6 +132,7 @@ pub struct AppleLibraries {
     pub at_host_connection_get_current_session_number: unsafe extern "C" fn(ATHostConnectionRef) -> u32,
     pub get_hash_cig: unsafe extern "C" fn(u32, *const std::ffi::c_char, i32, *mut *mut u8, *mut i32) -> i32,
     pub at_host_connection_release: unsafe extern "C" fn(ATHostConnectionRef),
+    pub at_host_connection_destroy: unsafe extern "C" fn(ATHostConnectionRef) -> i32,
     pub at_host_connection_send_host_info: unsafe extern "C" fn(ATHostConnectionRef, CFDictionaryRef),
     pub at_host_connection_send_sync_request: unsafe extern "C" fn(ATHostConnectionRef, CFArrayRef, CFDictionaryRef, CFDictionaryRef),
     pub at_host_connection_send_metadata_sync_finished: unsafe extern "C" fn(ATHostConnectionRef, CFDictionaryRef, CFDictionaryRef),
@@ -254,6 +255,7 @@ pub fn get_apple_libraries() -> Result<Arc<AppleLibraries>> {
         let at_host_connection_get_current_session_number = load_sym!(ath_lib, "ATHostConnectionGetCurrentSessionNumber");
         let get_hash_cig = load_sym!(itunes_lib, "GetHashCig");
         let at_host_connection_release = load_sym!(ath_lib, "ATHostConnectionRelease");
+        let at_host_connection_destroy = load_sym!(ath_lib, "ATHostConnectionDestroy");
         let at_host_connection_send_host_info = load_sym!(ath_lib, "ATHostConnectionSendHostInfo");
         let at_host_connection_send_sync_request = load_sym!(ath_lib, "ATHostConnectionSendSyncRequest");
         let at_host_connection_send_metadata_sync_finished = load_sym!(ath_lib, "ATHostConnectionSendMetadataSyncFinished");
@@ -329,6 +331,7 @@ pub fn get_apple_libraries() -> Result<Arc<AppleLibraries>> {
             at_host_connection_get_current_session_number,
             get_hash_cig,
             at_host_connection_release,
+            at_host_connection_destroy,
             at_host_connection_send_host_info,
             at_host_connection_send_sync_request,
             at_host_connection_send_metadata_sync_finished,
