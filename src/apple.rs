@@ -128,13 +128,13 @@ pub struct AppleLibraries {
 
     // AirTrafficHost functions
     pub at_host_connection_create: unsafe extern "C" fn(CFStringRef) -> ATHostConnectionRef,
-    pub at_host_connection_create_with_library: unsafe extern "C" fn(CFStringRef, CFStringRef, *mut std::ffi::c_void) -> ATHostConnectionRef,
-    pub at_host_connection_get_grappa_session_id: unsafe extern "C" fn(ATHostConnectionRef) -> u32,
-    pub at_host_connection_get_current_session_number: unsafe extern "C" fn(ATHostConnectionRef) -> u32,
-    pub at_host_connection_send_power_assertion: unsafe extern "C" fn(ATHostConnectionRef, CFTypeRef) -> i32,
+    pub at_host_connection_create_with_library: unsafe extern "C" fn(CFStringRef, CFStringRef, i32) -> i32,
+    pub at_host_connection_get_grappa_session_id: unsafe extern "C" fn(i32) -> u32,
+    pub at_host_connection_get_current_session_number: unsafe extern "C" fn(i32) -> u32,
+    pub at_host_connection_send_power_assertion: unsafe extern "C" fn(i32, CFTypeRef) -> i32,
     pub get_hash_cig: Option<unsafe extern "C" fn(u32, *const std::ffi::c_char, i32, *mut *mut u8, *mut i32) -> i32>,
     pub at_host_connection_release: unsafe extern "C" fn(ATHostConnectionRef),
-    pub at_host_connection_destroy: unsafe extern "C" fn(ATHostConnectionRef) -> i32,
+    pub at_host_connection_destroy: unsafe extern "C" fn(i32) -> i32,
     pub at_host_connection_send_host_info: unsafe extern "C" fn(ATHostConnectionRef, CFDictionaryRef),
     pub at_host_connection_send_sync_request: unsafe extern "C" fn(ATHostConnectionRef, CFArrayRef, CFDictionaryRef, CFDictionaryRef),
     pub at_host_connection_send_metadata_sync_finished: unsafe extern "C" fn(ATHostConnectionRef, CFDictionaryRef, CFDictionaryRef),
@@ -451,10 +451,10 @@ impl AppleLibraries {
         let guid = self.create_cf_string(guid)?;
         let library_id = self.create_cf_string(library_id)?;
         let connection = unsafe {
-            (self.at_host_connection_create_with_library)(guid.raw, library_id.raw, ptr::null_mut())
+            (self.at_host_connection_create_with_library)(guid.raw, library_id.raw, 0)
         };
-        if connection.is_null() {
-            bail!("ATHostConnectionCreateWithLibrary returned null while creating Grappa session");
+        if connection == 0 {
+            bail!("ATHostConnectionCreateWithLibrary returned handle 0 while creating Grappa session");
         }
         // Apple's Windows iTunes stack lazily creates the Grappa context when
         // the host takes the ATC power assertion. Calling GetGrappaSessionId
