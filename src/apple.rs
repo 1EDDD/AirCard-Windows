@@ -68,7 +68,7 @@ pub struct AppleLibraries {
     pub cf_release: unsafe extern "C" fn(CFTypeRef),
     pub cf_retain: unsafe extern "C" fn(CFTypeRef) -> CFTypeRef,
     pub cf_equal: unsafe extern "C" fn(CFTypeRef, CFTypeRef) -> u32,
-    pub cf_boolean_true: CFTypeRef,
+    pub cf_boolean_true: usize,
     pub cf_run_loop_get_main: unsafe extern "C" fn() -> *const std::ffi::c_void,
     pub cf_run_loop_run_in_mode: unsafe extern "C" fn(CFStringRef, f64, u8) -> i32,
     pub cf_run_loop_stop: unsafe extern "C" fn(*const std::ffi::c_void),
@@ -260,11 +260,11 @@ pub fn get_apple_libraries() -> Result<Arc<AppleLibraries>> {
         let cf_release = load_sym!(cf_lib, "CFRelease");
         let cf_retain = load_sym!(cf_lib, "CFRetain");
         let cf_equal = load_sym!(cf_lib, "CFEqual");
-        let cf_boolean_true: CFTypeRef = {
+        let cf_boolean_true: usize = {
             let symbol: Symbol<CFTypeRef> = cf_lib
                 .get(b"kCFBooleanTrue")
                 .context("Missing symbol: kCFBooleanTrue")?;
-            *symbol
+            *symbol as usize
         };
         let cf_run_loop_get_main = load_sym!(cf_lib, "CFRunLoopGetMain");
         let cf_run_loop_run_in_mode = load_sym!(cf_lib, "CFRunLoopRunInMode");
@@ -462,7 +462,7 @@ impl AppleLibraries {
         // iTunes/AMDS builds. This is the same native step used by iTunes
         // before generating the Grappa CIG for RequestingSync.
         let power_rc = unsafe {
-            (self.at_host_connection_send_power_assertion)(connection, self.cf_boolean_true)
+            (self.at_host_connection_send_power_assertion)(connection, self.cf_boolean_true as CFTypeRef)
         };
         if power_rc != 0 {
             unsafe { (self.at_host_connection_destroy)(connection); }
