@@ -53,6 +53,7 @@ pub struct AppleLibraries {
     _cf_lib: Library,
     _md_lib: Library,
     _ath_lib: Library,
+    _itunes_lib: Library,
 
     // CoreFoundation functions
     pub cf_string_create: unsafe extern "C" fn(CFAllocatorRef, *const std::ffi::c_char, CFStringEncoding) -> CFStringRef,
@@ -126,6 +127,9 @@ pub struct AppleLibraries {
 
     // AirTrafficHost functions
     pub at_host_connection_create: unsafe extern "C" fn(CFStringRef) -> ATHostConnectionRef,
+    pub at_host_connection_create_with_library: unsafe extern "C" fn(CFStringRef, CFStringRef, *mut std::ffi::c_void) -> ATHostConnectionRef,
+    pub at_host_connection_get_grappa_session_id: unsafe extern "C" fn(ATHostConnectionRef) -> u32,
+    pub at_host_connection_get_current_session_number: unsafe extern "C" fn(ATHostConnectionRef) -> u32,
     pub at_host_connection_release: unsafe extern "C" fn(ATHostConnectionRef),
     pub at_host_connection_send_host_info: unsafe extern "C" fn(ATHostConnectionRef, CFDictionaryRef),
     pub at_host_connection_send_sync_request: unsafe extern "C" fn(ATHostConnectionRef, CFArrayRef, CFDictionaryRef, CFDictionaryRef),
@@ -167,11 +171,13 @@ pub fn get_apple_libraries() -> Result<Arc<AppleLibraries>> {
     let cf_path = dir.join("CoreFoundation.dll");
     let md_path = dir.join("MobileDevice.dll");
     let ath_path = dir.join("AirTrafficHost.dll");
+    let itunes_path = dir.join("..").join("iTunes").join("iTunes.dll");
 
     unsafe {
         let cf_lib = Library::new(&cf_path).context("Failed to load CoreFoundation.dll")?;
         let md_lib = Library::new(&md_path).context("Failed to load MobileDevice.dll")?;
         let ath_lib = Library::new(&ath_path).context("Failed to load AirTrafficHost.dll")?;
+        let itunes_lib = Library::new(&itunes_path).context("Failed to load iTunes.dll")?;
 
         macro_rules! load_sym {
             ($lib:expr, $name:expr) => {{
@@ -238,6 +244,9 @@ pub fn get_apple_libraries() -> Result<Arc<AppleLibraries>> {
         let afc_remove_path = load_sym!(md_lib, "AFCRemovePath");
 
         let at_host_connection_create = load_sym!(ath_lib, "ATHostConnectionCreate");
+        let at_host_connection_create_with_library = load_sym!(ath_lib, "ATHostConnectionCreateWithLibrary");
+        let at_host_connection_get_grappa_session_id = load_sym!(ath_lib, "ATHostConnectionGetGrappaSessionId");
+        let at_host_connection_get_current_session_number = load_sym!(ath_lib, "ATHostConnectionGetCurrentSessionNumber");
         let at_host_connection_release = load_sym!(ath_lib, "ATHostConnectionRelease");
         let at_host_connection_send_host_info = load_sym!(ath_lib, "ATHostConnectionSendHostInfo");
         let at_host_connection_send_sync_request = load_sym!(ath_lib, "ATHostConnectionSendSyncRequest");
@@ -251,6 +260,7 @@ pub fn get_apple_libraries() -> Result<Arc<AppleLibraries>> {
             _cf_lib: cf_lib,
             _md_lib: md_lib,
             _ath_lib: ath_lib,
+            _itunes_lib: itunes_lib,
 
             cf_string_create,
             cf_string_get_length,
@@ -308,6 +318,9 @@ pub fn get_apple_libraries() -> Result<Arc<AppleLibraries>> {
             afc_remove_path,
 
             at_host_connection_create,
+            at_host_connection_create_with_library,
+            at_host_connection_get_grappa_session_id,
+            at_host_connection_get_current_session_number,
             at_host_connection_release,
             at_host_connection_send_host_info,
             at_host_connection_send_sync_request,
