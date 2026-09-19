@@ -740,6 +740,8 @@ where
         log(&format!("Using AirTraffic session {} for HostInfo and sync.", atc_session));
 
         let library_id = uuid::Uuid::new_v4().to_string();
+        let itunes_version = crate::apple::discover_itunes_version()
+            .unwrap_or_else(|| "13.7.0.161".to_string());
         // iOS requires a host-generated Grappa blob for legacy sync. We do not
         // fabricate one from the device's GrappaSupportInfo because Apple
         // derives it from the host-side Grappa session machinery.
@@ -747,7 +749,7 @@ where
         // exact failure returned by ATGrappaEstablishSession.
         let host_info_without_grappa = dict(vec![
             ("Type", plist::Value::String("iTunes".into())),
-            ("Version", plist::Value::String("13.7.0.161".into())),
+            ("Version", plist::Value::String(itunes_version.clone())),
             ("MacOSVersion", plist::Value::String("Windows NT 10.0".into())),
             ("SyncHostName", plist::Value::String("aircard".into())),
             ("LibraryID", plist::Value::String(library_id.clone())),
@@ -768,7 +770,7 @@ where
             // ATHostConnectionCreateWithLibrary expects the host iTunes version
             // as its first argument, followed by the device UDID. LibraryID is
             // the per-sync identifier placed inside HostInfo and is not that argument.
-            .native_grappa_session_id(&device_info.udid, "13.7.0.161")
+            .native_grappa_session_id(&device_info.udid, &itunes_version)
             .context("Failed to create the native Apple Grappa session")?;
         log(&format!("Native Apple Grappa session id: {}", grappa_session));
 
