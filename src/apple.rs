@@ -478,11 +478,11 @@ impl AppleLibraries {
     pub fn native_grappa_session_id(&self, guid: &str, library_id: &str) -> Result<u32> {
         let guid = self.create_cf_string(guid)?;
         let library_id = self.create_cf_string(library_id)?;
-        // Windows iTunes bindings expose this as:
-        // (library/version CFString, device UDID CFString, int unknown) -> ATHostConnectionRef.
-        // The return value is pointer-sized. Only the third scalar is an i32.
+        // Apple Windows bindings expose this as:
+        // (device UDID CFString, AirTraffic LibraryID CFString, int unknown)
+        // -> ATHostConnectionRef. The return value is pointer-sized.
         let connection = unsafe {
-            (self.at_host_connection_create_with_library)(library_id.raw, guid.raw, 0)
+            (self.at_host_connection_create_with_library)(guid.raw, library_id.raw, 0)
         };
         if connection.is_null() {
             bail!("ATHostConnectionCreateWithLibrary returned null while creating Grappa session");
