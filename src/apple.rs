@@ -53,6 +53,7 @@ pub struct AppleLibraries {
     _cf_lib: Library,
     _md_lib: Library,
     _ath_lib: Library,
+    _itunes_lib: Option<Library>,
 
     // CoreFoundation functions
     pub cf_string_create: unsafe extern "C" fn(CFAllocatorRef, *const std::ffi::c_char, CFStringEncoding) -> CFStringRef,
@@ -67,6 +68,7 @@ pub struct AppleLibraries {
     pub cf_release: unsafe extern "C" fn(CFTypeRef),
     pub cf_retain: unsafe extern "C" fn(CFTypeRef) -> CFTypeRef,
     pub cf_equal: unsafe extern "C" fn(CFTypeRef, CFTypeRef) -> u32,
+    pub cf_boolean_true: usize,
     pub cf_run_loop_get_main: unsafe extern "C" fn() -> *const std::ffi::c_void,
     pub cf_run_loop_run_in_mode: unsafe extern "C" fn(CFStringRef, f64, u8) -> i32,
     pub cf_run_loop_stop: unsafe extern "C" fn(*const std::ffi::c_void),
@@ -126,7 +128,13 @@ pub struct AppleLibraries {
 
     // AirTrafficHost functions
     pub at_host_connection_create: unsafe extern "C" fn(CFStringRef) -> ATHostConnectionRef,
+    pub at_host_connection_create_with_library: unsafe extern "C" fn(CFStringRef, CFStringRef, i32) -> ATHostConnectionRef,
+    pub at_host_connection_get_grappa_session_id: unsafe extern "C" fn(ATHostConnectionRef) -> i32,
+    pub at_host_connection_get_current_session_number: unsafe extern "C" fn(ATHostConnectionRef) -> i32,
+    pub at_host_connection_send_power_assertion: unsafe extern "C" fn(ATHostConnectionRef, CFTypeRef) -> i32,
+    pub get_hash_cig: Option<unsafe extern "C" fn(u32, *const std::ffi::c_char, i32, *mut *mut u8, *mut i32) -> i32>,
     pub at_host_connection_release: unsafe extern "C" fn(ATHostConnectionRef),
+    pub at_host_connection_destroy: unsafe extern "C" fn(ATHostConnectionRef),
     pub at_host_connection_send_host_info: unsafe extern "C" fn(ATHostConnectionRef, CFDictionaryRef),
     pub at_host_connection_send_sync_request: unsafe extern "C" fn(ATHostConnectionRef, CFArrayRef, CFDictionaryRef, CFDictionaryRef),
     pub at_host_connection_send_metadata_sync_finished: unsafe extern "C" fn(ATHostConnectionRef, CFDictionaryRef, CFDictionaryRef),
@@ -149,6 +157,87 @@ pub fn locate_support_dir() -> Option<PathBuf> {
         })
 }
 
+
+fn discover_itunes_dll() -> Option<PathBuf> {
+    let mut candidates = vec![
+        PathBuf::from(r"C:\Program Files\iTunes\iTunes.dll"),
+        PathBuf::from(r"C:\Program Files (x86)\iTunes\iTunes.dll"),
+        PathBuf::from(r"C:\Program Files\Common Files\Apple\iTunes\iTunes.dll"),
+        PathBuf::from(r"C:\Program Files (x86)\Common Files\Apple\iTunes\iTunes.dll"),
+    ];
+
+    for key in [
+        r"HKLM\SOFTWARE\Apple Computer, Inc.\iTunes",
+        r"HKLM\SOFTWARE\WOW6432Node\Apple Computer, Inc.\iTunes",
+        r"HKLM\SOFTWARE\Apple Inc.\iTunes",
+        r"HKLM\SOFTWARE\WOW6432Node\Apple Inc.\iTunes",
+    ] {
+        if let Ok(output) = std::process::Command::new("reg")
+            .args(["query", key, "/v", "InstallDir"])
+            .output()
+        {
+            if output.status.success() {
+                let text = String::from_utf8_lossy(&output.stdout);
+                for line in text.lines() {
+                    if line.contains("InstallDir") {
+                        if let Some(path) = line.split_whitespace().last() {
+                            let p = PathBuf::from(path).join("iTunes.dll");
+                            if p.is_file() {
+                                candidates.push(p);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(program_files) = std::env::var_os("ProgramFiles") {
+        let root = PathBuf::from(program_files);
+        if let Ok(entries) = std::fs::read_dir(root.join("WindowsApps")) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+                if name.starts_with("appleinc.itunes_") {
+                    let p = entry.path().join("iTunes.dll");
+                    if p.is_file() {
+                        candidates.push(p);
+                    }
+                }
+            }
+        }
+    }
+
+    candidates.into_iter().find(|p| p.is_file())
+}
+
+pub fn discover_itunes_version() -> Option<String> {
+    for key in [
+        r"HKLM\SOFTWARE\Apple Computer, Inc.\iTunes",
+        r"HKLM\SOFTWARE\WOW6432Node\Apple Computer, Inc.\iTunes",
+        r"HKLM\SOFTWARE\Apple Inc.\iTunes",
+        r"HKLM\SOFTWARE\WOW6432Node\Apple Inc.\iTunes",
+    ] {
+        if let Ok(output) = std::process::Command::new("reg")
+            .args(["query", key, "/v", "Version"])
+            .output()
+        {
+            if output.status.success() {
+                let text = String::from_utf8_lossy(&output.stdout);
+                for line in text.lines() {
+                    if line.contains("Version") {
+                        if let Some(value) = line.split_whitespace().last() {
+                            if value.chars().any(|c| c.is_ascii_digit()) && value.contains('.') {
+                                return Some(value.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 pub fn get_apple_libraries() -> Result<Arc<AppleLibraries>> {
     if let Some(libs) = LIBRARIES.get() {
         return Ok(Arc::clone(libs));
@@ -167,11 +256,16 @@ pub fn get_apple_libraries() -> Result<Arc<AppleLibraries>> {
     let cf_path = dir.join("CoreFoundation.dll");
     let md_path = dir.join("MobileDevice.dll");
     let ath_path = dir.join("AirTrafficHost.dll");
+    let itunes_path = discover_itunes_dll();
 
     unsafe {
         let cf_lib = Library::new(&cf_path).context("Failed to load CoreFoundation.dll")?;
         let md_lib = Library::new(&md_path).context("Failed to load MobileDevice.dll")?;
         let ath_lib = Library::new(&ath_path).context("Failed to load AirTrafficHost.dll")?;
+        let itunes_lib = match itunes_path {
+            Some(path) => Some(Library::new(&path).context("Failed to load iTunes.dll")?),
+            None => None,
+        };
 
         macro_rules! load_sym {
             ($lib:expr, $name:expr) => {{
@@ -194,6 +288,12 @@ pub fn get_apple_libraries() -> Result<Arc<AppleLibraries>> {
         let cf_release = load_sym!(cf_lib, "CFRelease");
         let cf_retain = load_sym!(cf_lib, "CFRetain");
         let cf_equal = load_sym!(cf_lib, "CFEqual");
+        let cf_boolean_true: usize = {
+            let symbol: Symbol<CFTypeRef> = cf_lib
+                .get(b"kCFBooleanTrue")
+                .context("Missing symbol: kCFBooleanTrue")?;
+            *symbol as usize
+        };
         let cf_run_loop_get_main = load_sym!(cf_lib, "CFRunLoopGetMain");
         let cf_run_loop_run_in_mode = load_sym!(cf_lib, "CFRunLoopRunInMode");
         let cf_run_loop_stop = load_sym!(cf_lib, "CFRunLoopStop");
@@ -238,7 +338,17 @@ pub fn get_apple_libraries() -> Result<Arc<AppleLibraries>> {
         let afc_remove_path = load_sym!(md_lib, "AFCRemovePath");
 
         let at_host_connection_create = load_sym!(ath_lib, "ATHostConnectionCreate");
+        let at_host_connection_create_with_library = load_sym!(ath_lib, "ATHostConnectionCreateWithLibrary");
+        let at_host_connection_get_grappa_session_id = load_sym!(ath_lib, "ATHostConnectionGetGrappaSessionId");
+        let at_host_connection_get_current_session_number = load_sym!(ath_lib, "ATHostConnectionGetCurrentSessionNumber");
+        let at_host_connection_send_power_assertion = load_sym!(ath_lib, "ATHostConnectionSendPowerAssertion");
+        let get_hash_cig = itunes_lib.as_ref().map(|lib| {
+            let symbol: Symbol<unsafe extern "C" fn(u32, *const std::ffi::c_char, i32, *mut *mut u8, *mut i32) -> i32> =
+                lib.get(b"GetHashCig").expect("GetHashCig symbol missing from iTunes.dll");
+            *symbol
+        });
         let at_host_connection_release = load_sym!(ath_lib, "ATHostConnectionRelease");
+        let at_host_connection_destroy = load_sym!(ath_lib, "ATHostConnectionDestroy");
         let at_host_connection_send_host_info = load_sym!(ath_lib, "ATHostConnectionSendHostInfo");
         let at_host_connection_send_sync_request = load_sym!(ath_lib, "ATHostConnectionSendSyncRequest");
         let at_host_connection_send_metadata_sync_finished = load_sym!(ath_lib, "ATHostConnectionSendMetadataSyncFinished");
@@ -251,6 +361,7 @@ pub fn get_apple_libraries() -> Result<Arc<AppleLibraries>> {
             _cf_lib: cf_lib,
             _md_lib: md_lib,
             _ath_lib: ath_lib,
+            _itunes_lib: itunes_lib,
 
             cf_string_create,
             cf_string_get_length,
@@ -264,6 +375,7 @@ pub fn get_apple_libraries() -> Result<Arc<AppleLibraries>> {
             cf_release,
             cf_retain,
             cf_equal,
+            cf_boolean_true,
             cf_run_loop_get_main,
             cf_run_loop_run_in_mode,
             cf_run_loop_stop,
@@ -308,7 +420,13 @@ pub fn get_apple_libraries() -> Result<Arc<AppleLibraries>> {
             afc_remove_path,
 
             at_host_connection_create,
+            at_host_connection_create_with_library,
+            at_host_connection_get_grappa_session_id,
+            at_host_connection_get_current_session_number,
+            at_host_connection_send_power_assertion,
+            get_hash_cig,
             at_host_connection_release,
+            at_host_connection_destroy,
             at_host_connection_send_host_info,
             at_host_connection_send_sync_request,
             at_host_connection_send_metadata_sync_finished,
@@ -354,6 +472,67 @@ impl Drop for CFTypeGuard {
 }
 
 impl AppleLibraries {
+    /// Ask Apple's Windows AirTrafficHost/iTunes stack for a Grappa session id.
+    /// This is intentionally isolated from the wireless transport: the native
+    /// API owns the Grappa session state while RSD carries the actual ATC data.
+    pub fn native_grappa_session_id(&self, guid: &str, library_id: &str) -> Result<u32> {
+        let guid = self.create_cf_string(guid)?;
+        let library_id = self.create_cf_string(library_id)?;
+        // Apple Windows bindings expose this as:
+        // (device UDID CFString, AirTraffic LibraryID CFString, int unknown)
+        // -> ATHostConnectionRef. The return value is pointer-sized.
+        let connection = unsafe {
+            (self.at_host_connection_create_with_library)(guid.raw, library_id.raw, 0)
+        };
+        if connection.is_null() {
+            bail!("ATHostConnectionCreateWithLibrary returned null while creating Grappa session");
+        }
+        // Apple's Windows iTunes stack lazily creates the Grappa context when
+        // the host takes the ATC power assertion. Calling GetGrappaSessionId
+        // immediately after CreateWithLibrary therefore returns 0 on some
+        // iTunes/AMDS builds. This is the same native step used by iTunes
+        // before generating the Grappa CIG for RequestingSync.
+        let power_rc = unsafe {
+            (self.at_host_connection_send_power_assertion)(connection, self.cf_boolean_true as CFTypeRef)
+        };
+        if power_rc != 0 {
+            unsafe { (self.at_host_connection_destroy)(connection); }
+            bail!("ATHostConnectionSendPowerAssertion failed with error code {power_rc}");
+        }
+        let session_id = unsafe { (self.at_host_connection_get_grappa_session_id)(connection) };
+        unsafe { (self.at_host_connection_destroy)(connection); }
+        if session_id <= 0 {
+            bail!("Apple AirTrafficHost returned invalid Grappa session id {session_id}");
+        }
+        Ok(session_id as u32)
+    }
+
+    /// Generate Apple's CIG blob for a binary plist using a native Grappa session.
+    pub fn get_hash_cig(&self, session_id: u32, plist_bytes: &[u8]) -> Result<Vec<u8>> {
+        let get_hash_cig = self.get_hash_cig.ok_or_else(|| anyhow::anyhow!("iTunes.dll/GetHashCig is not installed; Apple Mobile Device Support alone cannot generate the native Grappa CIG"))?;
+        let mut input = plist_bytes.to_vec();
+        input.push(0);
+        let mut out_ptr: *mut u8 = ptr::null_mut();
+        let mut out_len: i32 = 0;
+        let rc = unsafe {
+            (get_hash_cig)(
+                session_id,
+                input.as_ptr() as *const std::ffi::c_char,
+                i32::try_from(plist_bytes.len()).context("plist is too large for GetHashCig")?,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        if rc != 0 {
+            bail!("GetHashCig failed with error code {rc}");
+        }
+        if out_ptr.is_null() || out_len <= 0 {
+            bail!("GetHashCig returned an empty CIG blob");
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(out_ptr, out_len as usize).to_vec() };
+        Ok(bytes)
+    }
+
     pub fn create_cf_string(&self, s: &str) -> Result<CFStringGuard> {
         let c_str = CString::new(s).context("String contains null byte")?;
         let raw = unsafe {
