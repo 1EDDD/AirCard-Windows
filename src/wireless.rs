@@ -765,7 +765,10 @@ where
         let apple = crate::apple::get_apple_libraries()
             .context("Apple Mobile Device Support/iTunes is required for the native Grappa handshake")?;
         let grappa_session = apple
-            .native_grappa_session_id(&device_info.udid, &library_id)
+            // ATHostConnectionCreateWithLibrary expects the host iTunes version
+            // as its first argument, followed by the device UDID. LibraryID is
+            // the per-sync identifier placed inside HostInfo and is not that argument.
+            .native_grappa_session_id(&device_info.udid, "13.7.0.161")
             .context("Failed to create the native Apple Grappa session")?;
         log(&format!("Native Apple Grappa session id: {}", grappa_session));
 
